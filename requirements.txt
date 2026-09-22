@@ -1,0 +1,8 @@
+# Direct dependencies validated together on Python 3.12.
+fastapi[standard]==0.141.1
+sqlmodel==0.0.45
+psycopg2-binary==2.9.13
+pydantic-settings==2.15.0
+google-genai==2.24.0
+httpx==0.28.1
+ruff==0.16.8

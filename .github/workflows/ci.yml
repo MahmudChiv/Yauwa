@@ -1,0 +1,68 @@
+name: CI
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+# Railway's native GitHub integration deploys merges to main separately.
+# This workflow provides required passing checks before GitHub allows a merge.
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - run: ruff check .
+
+  smoke:
+    name: smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pip check
+      - name: Import infrastructure and check app startup
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -c "import app.config; import app.db.session; from main import app"
+          python -m uvicorn main:app --host 127.0.0.1 --port 8000 > /tmp/yauwa-smoke.log 2>&1 &
+          server_pid=$!
+          cleanup() {
+            result=$?
+            if [ "$result" -ne 0 ]; then cat /tmp/yauwa-smoke.log; fi
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          python - <<'PY'
+          import json
+          import time
+          import urllib.error
+          import urllib.request
+
+          deadline = time.monotonic() + 30
+          while time.monotonic() < deadline:
+              try:
+                  with urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=1) as response:
+                      assert response.status == 200
+                      assert json.load(response) == {"status": "healthy"}
+                  print("Startup and /health checks passed.")
+                  break
+              except (urllib.error.URLError, TimeoutError):
+                  time.sleep(0.5)
+          else:
+              raise SystemExit("App did not become healthy within 30 seconds.")
+          PY

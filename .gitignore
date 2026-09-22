@@ -1,0 +1,18 @@
+# Local credentials; keep the shared template.
+.env
+.env.*
+!.env.example
+
+# Virtual environments and generated caches.
+.venv/
+venv/
+env/
+fastapi-env/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
