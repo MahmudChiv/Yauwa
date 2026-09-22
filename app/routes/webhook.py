@@ -17,7 +17,7 @@ from twilio.request_validator import (  # pyright: ignore[reportMissingImports]
 from app.config import TwilioSettings, get_twilio_settings
 from app.schemas.webhook import TwilioWebhookPayload, WebhookResponse
 
-router = APIRouter(tags=["Twilio"])
+router = APIRouter(prefix="/api/v1", tags=["Twilio"])
 
 MAX_AUDIO_BYTES = 16 * 1024 * 1024
 MAX_REDIRECTS = 3
