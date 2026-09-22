@@ -54,6 +54,10 @@ def get_settings() -> Settings:
     return Settings()
 
 
+@lru_cache(maxsize=1)
+def get_twilio_settings() -> TwilioSettings:
+    """Validate only the settings needed by the webhook, on first use."""
+    return TwilioSettings()
 
 
 class DatabaseSettings(BaseSettings):
