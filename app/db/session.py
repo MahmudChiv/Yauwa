@@ -6,13 +6,13 @@ from functools import lru_cache
 from sqlalchemy import Engine
 from sqlmodel import Session, create_engine
 
-from app.config import get_settings
+from app.config import get_database_settings
 
 
 @lru_cache(maxsize=1)
 def get_engine() -> Engine:
     """Create one synchronous engine without connecting until first use."""
-    return create_engine(str(get_settings().database_url), pool_pre_ping=True)
+    return create_engine(str(get_database_settings().database_url), pool_pre_ping=True)
 
 
 def get_session() -> Generator[Session, None, None]:
