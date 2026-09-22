@@ -1,8 +1,7 @@
 """SQLModel class for the Trader entity.
 
 A Trader is a Nigerian informal trader who interacts with the bot via WhatsApp.
-This table stores their identity and language preference so the bot can reply
-in the right language (e.g. Pidgin, Hausa, Yoruba).
+This table stores their identity and language preference
 """
 
 from datetime import datetime, timezone
@@ -25,7 +24,7 @@ class Trader(SQLModel, table=True):
     # The trader's display name (used when the bot greets them).
     name: str
 
-    # Preferred reply language code, e.g. "pidgin", "hausa", "yoruba".
+    # Preferred reply language code, e.g. "pidgin".
     # The AI layer reads this to pick the right reply style.
     language: str
 
