@@ -30,3 +30,23 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Validate settings on first use; imports and health checks need no keys."""
     return Settings()
+
+
+
+
+class DatabaseSettings(BaseSettings):
+    """Minimal config for database-only tooling (Alembic, migration scripts)."""
+
+    model_config = SettingsConfigDict(
+        env_file=Path(__file__).resolve().parent.parent / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    database_url: PostgresDsn
+
+
+@lru_cache(maxsize=1)
+def get_database_settings() -> DatabaseSettings:
+    """Read only DATABASE_URL, so tooling never needs provider credentials."""
+    return DatabaseSettings()
