@@ -5,9 +5,10 @@ who cannot read or write, or have limited literacy. Traders will log sales,
 track stock, and manage restocking by speaking. Replies must be in Nigerian
 Pidgin and delivered as audio: literacy is the core constraint.
 
-**Current status: scaffolding only.** The existing `/health` endpoint works.
-Models, webhook schemas, AI integrations, and business routes are separate
-tasks for our four-person, six-day build week. Their TODO files are intentional.
+**Current status:** the signed Twilio webhook accepts text messages and downloads
+the first audio attachment to a temporary file. Models, AI integrations, and
+ledger business logic are separate tasks for our four-person, six-day build
+week. Their TODO files are intentional.
 
 ## Planned architecture
 
@@ -33,9 +34,10 @@ update → Gemini reply generation, Pidgin only → ElevenLabs TTS → sent back
 ```text
 main.py                 Existing FastAPI app and /health endpoint
 app/
-  routes/routes.py      Existing empty /api/v1 router; not yet registered
+  routes/routes.py      Existing /api/v1 router
+  routes/webhook.py     Signed /webhook receiver and audio downloader
   models/              Trader, Item, Sale placeholders
-  schemas/webhook.py   Incoming Twilio payload placeholder
+  schemas/webhook.py   Incoming Twilio payload and response schemas
   ai/                  Extraction, reply generation, and TTS placeholders
   config.py            Settings and cached get_settings()
   db/session.py        Cached get_engine() and yielding get_session()
@@ -104,6 +106,7 @@ coding agent to read [GUIDE.md](GUIDE.md) before every task.
    | `TWILIO_ACCOUNT_SID` | Your Twilio account SID |
    | `TWILIO_AUTH_TOKEN` | Your Twilio auth token |
    | `TWILIO_WHATSAPP_NUMBER` | Your Twilio sender, with `whatsapp:` prefix and international number |
+   | `TWILIO_WEBHOOK_URL` | Exact public HTTPS URL Twilio calls, ending in `/webhook` |
    | `GEMINI_API_KEY` | Your Google AI Studio API key |
    | `ELEVENLABS_API_KEY` | Your ElevenLabs API key |
    | `ELEVENLABS_VOICE_ID` | The voice ID selected for your development account |
@@ -137,7 +140,7 @@ coding agent to read [GUIDE.md](GUIDE.md) before every task.
    Stop the server with Ctrl+C.
 
 The health endpoint needs no credentials or running database. Settings validate
-only when `get_settings()` is called; at that point all seven values are required,
+only when `get_settings()` is called; at that point its seven values are required,
 and `XXXXXX` is not a valid database URL. Placeholder provider keys cannot make
 real API calls. Settings read the repository-root `.env`; process environment
 variables take precedence. Restart after changing configuration because settings
@@ -148,6 +151,44 @@ directly. Secret fields expose their value with `.get_secret_value()` only when
 passing it to a provider client; do not log settings or database URLs.
 Database routes can use `Depends(get_session)`. Sessions close automatically;
 feature code owns commits. Engine construction does not connect or create tables.
+
+The webhook uses the focused `get_twilio_settings()` accessor, so it requires
+only `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_WEBHOOK_URL`.
+
+## Twilio webhook setup and local test
+
+Expose the local server through an HTTPS tunnel, then set `TWILIO_WEBHOOK_URL`
+to the exact public URL, such as `https://your-tunnel.example/webhook`. In the
+Twilio WhatsApp Sandbox or sender settings, configure **When a message comes in**
+to use the same URL with HTTP POST. Twilio signs the URL, so changes to its
+scheme, hostname, path, query string, or trailing slash will invalidate requests.
+
+For a signed local text-message test, keep the app running and use another
+terminal. The example signs every field that it sends:
+
+```sh
+export TWILIO_WEBHOOK_URL='https://your-tunnel.example/webhook'
+export TEST_SENDER='whatsapp:+2348012345678'
+export TWILIO_SIGNATURE=$(python - <<'PY'
+from app.config import get_twilio_settings
+from twilio.request_validator import RequestValidator
+
+settings = get_twilio_settings()
+fields = {"From": "whatsapp:+2348012345678"}
+validator = RequestValidator(settings.twilio_auth_token.get_secret_value())
+print(validator.compute_signature(str(settings.twilio_webhook_url), fields))
+PY
+)
+curl -X POST "${TWILIO_WEBHOOK_URL}" \
+  -H "X-Twilio-Signature: ${TWILIO_SIGNATURE}" \
+  --data-urlencode "From=${TEST_SENDER}"
+```
+
+A text-only request returns `file_path: null`. An audio request returns an
+absolute temporary path on the server. This JSON response is for development;
+it does not yet send a TwiML or WhatsApp reply. Successful files remain available
+for the future AI extraction step, which must delete each file after consuming
+it. Failed and partial downloads are removed immediately.
 
 ## Checks and review
 
@@ -178,7 +219,7 @@ Connect a Render web service to this GitHub repository and select branch `main`:
 - Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`.
 - Health check path: `/health`.
 - Auto-deploy: **After CI Checks Pass**.
-- Set the seven application variables in Render's environment settings using
+- Set the eight application variables in Render's environment settings using
   deployment credentials and the deployment PostgreSQL URL; do not upload `.env`.
 
 Render's [native GitHub integration](https://render.com/docs/deploys) handles
