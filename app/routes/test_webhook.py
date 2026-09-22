@@ -20,7 +20,7 @@ from main import app
 
 ACCOUNT_SID = "AC11111111111111111111111111111111"
 AUTH_TOKEN = "test-auth-token"
-WEBHOOK_URL = "https://example.test/webhook"
+WEBHOOK_URL = "https://example.test/api/v1/webhook"
 MEDIA_URL = (
     "https://api.twilio.com/2010-04-01/Accounts/"
     f"{ACCOUNT_SID}/Messages/MM222/Media/ME333"
@@ -69,7 +69,7 @@ class WebhookTestCase(unittest.IsolatedAsyncioTestCase):
             transport=httpx.ASGITransport(app=app),
             base_url="http://test",
         ) as client:
-            return await client.post("/webhook", data=fields, headers=headers)
+            return await client.post("/api/v1/webhook", data=fields, headers=headers)
 
     async def test_text_message_returns_null_path(self) -> None:
         fields = {"From": "whatsapp:+2348012345678", "Body": "How far?"}
@@ -112,7 +112,7 @@ class WebhookTestCase(unittest.IsolatedAsyncioTestCase):
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
             response = await client.post(
-                "/webhook",
+                "/api/v1/webhook",
                 data={"From": "whatsapp:+2348012345678"},
                 headers={"X-Twilio-Signature": "not-valid"},
             )
@@ -131,7 +131,9 @@ class WebhookTestCase(unittest.IsolatedAsyncioTestCase):
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://test"
             ) as client:
-                response = await client.post("/webhook", data={"From": "+234"})
+                response = await client.post(
+                    "/api/v1/webhook", data={"From": "+234"}
+                )
         self.assertEqual(response.status_code, 503)
         self.assertNotIn(AUTH_TOKEN, response.text)
 

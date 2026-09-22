@@ -35,7 +35,7 @@ update → Gemini reply generation, Pidgin only → ElevenLabs TTS → sent back
 main.py                 Existing FastAPI app and /health endpoint
 app/
   routes/routes.py      Existing /api/v1 router
-  routes/webhook.py     Signed /webhook receiver and audio downloader
+  routes/webhook.py     Signed /api/v1/webhook receiver and audio downloader
   models/              Trader, Item, Sale placeholders
   schemas/webhook.py   Incoming Twilio payload and response schemas
   ai/                  Extraction, reply generation, and TTS placeholders
@@ -106,7 +106,7 @@ coding agent to read [GUIDE.md](GUIDE.md) before every task.
    | `TWILIO_ACCOUNT_SID` | Your Twilio account SID |
    | `TWILIO_AUTH_TOKEN` | Your Twilio auth token |
    | `TWILIO_WHATSAPP_NUMBER` | Your Twilio sender, with `whatsapp:` prefix and international number |
-   | `TWILIO_WEBHOOK_URL` | Exact public HTTPS URL Twilio calls, ending in `/webhook` |
+   | `TWILIO_WEBHOOK_URL` | Exact public HTTPS URL Twilio calls, ending in `/api/v1/webhook` |
    | `GEMINI_API_KEY` | Your Google AI Studio API key |
    | `ELEVENLABS_API_KEY` | Your ElevenLabs API key |
    | `ELEVENLABS_VOICE_ID` | The voice ID selected for your development account |
@@ -158,7 +158,8 @@ only `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_WEBHOOK_URL`.
 ## Twilio webhook setup and local test
 
 Expose the local server through an HTTPS tunnel, then set `TWILIO_WEBHOOK_URL`
-to the exact public URL, such as `https://your-tunnel.example/webhook`. In the
+to the exact public URL, such as
+`https://your-tunnel.example/api/v1/webhook`. In the
 Twilio WhatsApp Sandbox or sender settings, configure **When a message comes in**
 to use the same URL with HTTP POST. Twilio signs the URL, so changes to its
 scheme, hostname, path, query string, or trailing slash will invalidate requests.
@@ -167,7 +168,7 @@ For a signed local text-message test, keep the app running and use another
 terminal. The example signs every field that it sends:
 
 ```sh
-export TWILIO_WEBHOOK_URL='https://your-tunnel.example/webhook'
+export TWILIO_WEBHOOK_URL='https://your-tunnel.example/api/v1/webhook'
 export TEST_SENDER='whatsapp:+2348012345678'
 export TWILIO_SIGNATURE=$(python - <<'PY'
 from app.config import get_twilio_settings
