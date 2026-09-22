@@ -5,5 +5,6 @@ psycopg2-binary==2.9.13
 pydantic-settings==2.15.0
 google-genai==2.24.0
 httpx==0.28.1
+twilio==9.11.1
 ruff==0.16.8
 alembic==1.19.1
