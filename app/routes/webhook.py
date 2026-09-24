@@ -1,27 +1,41 @@
 """Receive signed Twilio WhatsApp webhooks and download their first audio file."""
 
 import asyncio
+import logging
+import time
 import mimetypes
 import tempfile
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response, status
+from fastapi.responses import FileResponse
 from pydantic import ValidationError
 from starlette.datastructures import FormData
 from twilio.request_validator import (  # pyright: ignore[reportMissingImports]
     RequestValidator,
 )
 
-from app.config import TwilioSettings, get_twilio_settings
-from app.schemas.webhook import TwilioWebhookPayload, WebhookResponse
+from app.ai.onboarding import (
+    onboarding_complete,
+    onboard_trader,
+    normalize_phone_number,
+)
+from app.ai.tts import get_media
+from app.config import Settings, TwilioSettings, get_settings, get_twilio_settings
+from app.db.session import get_engine
+from app.schemas.webhook import TwilioWebhookPayload
+from sqlmodel import Session
 
 router = APIRouter(prefix="/api/v1", tags=["Twilio"])
 
 MAX_AUDIO_BYTES = 16 * 1024 * 1024
 MAX_REDIRECTS = 3
-DOWNLOAD_DEADLINE_SECONDS = 15
+DOWNLOAD_DEADLINE_SECONDS = 45
+REQUEST_TIMEOUT_SECONDS = 30
+CONNECT_TIMEOUT_SECONDS = 15
+CONNECT_RETRIES = 1
 REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
 
@@ -142,17 +156,22 @@ async def _download_audio(
     )
     path: Path | None = None
     temp_file = None
+    effective_transport = transport or httpx.AsyncHTTPTransport(retries=CONNECT_RETRIES)
 
     try:
         async with asyncio.timeout(DOWNLOAD_DEADLINE_SECONDS):
             async with httpx.AsyncClient(
                 follow_redirects=False,
-                timeout=httpx.Timeout(DOWNLOAD_DEADLINE_SECONDS),
-                transport=transport,
+                timeout=httpx.Timeout(
+                    REQUEST_TIMEOUT_SECONDS, connect=CONNECT_TIMEOUT_SECONDS
+                ),
+                transport=effective_transport,
             ) as client:
                 current_url = media_url
                 for redirect_count in range(MAX_REDIRECTS + 1):
-                    request_auth = auth if _same_origin(media_url, current_url) else None
+                    request_auth = (
+                        auth if _same_origin(media_url, current_url) else None
+                    )
                     async with client.stream(
                         "GET", current_url, auth=request_auth
                     ) as response:
@@ -219,7 +238,6 @@ async def _download_audio(
                             )
                         await asyncio.to_thread(temp_file.close)
                         temp_file = None
-                        # TODO: file should be deleted after the AI extraction step consumes it — wire this in once that pipeline exists
                         return str(path)
 
                 raise HTTPException(
@@ -260,9 +278,107 @@ async def _download_audio(
             await _remove_file(path)
 
 
-@router.post("/webhook", response_model=WebhookResponse)
-async def receive_twilio_webhook(request: Request) -> WebhookResponse:
-    """Validate one incoming WhatsApp message and download its first audio file."""
+logger = logging.getLogger(__name__)
+MESSAGE_TTL_SECONDS = 24 * 60 * 60
+_seen_messages: dict[str, float] = {}
+_seen_messages_lock = asyncio.Lock()
+_phone_locks: dict[str, asyncio.Lock] = {}
+
+
+async def _claim_message(message_sid: str) -> bool:
+    """Suppress duplicate webhook deliveries for this running process."""
+    now = time.monotonic()
+    async with _seen_messages_lock:
+        expired = [
+            sid
+            for sid, seen_at in _seen_messages.items()
+            if now - seen_at >= MESSAGE_TTL_SECONDS
+        ]
+        for sid in expired:
+            _seen_messages.pop(sid, None)
+        if message_sid in _seen_messages:
+            return False
+        _seen_messages[message_sid] = now
+        return True
+
+
+async def _process_incoming_message(
+    payload: TwilioWebhookPayload,
+    twilio_settings: TwilioSettings,
+) -> str:
+    """Route one accepted message after Twilio has received its acknowledgement."""
+    started_at = time.perf_counter()
+    phone_number = normalize_phone_number(payload.sender)
+    lock = _phone_locks.setdefault(phone_number, asyncio.Lock())
+    async with lock:
+        try:
+            with Session(get_engine()) as session:
+                if onboarding_complete(session, phone_number):
+                    print(f"User {phone_number} already onboarded")
+                    return "user exist already"
+        except Exception:
+            logger.exception("Trader lookup failed")
+            return "processing failed"
+
+        audio_path: str | None = None
+        try:
+            settings: Settings = get_settings()
+            normalized_content_type = (
+                payload.content_type.partition(";")[0].strip().lower()
+                if payload.content_type
+                else None
+            )
+            if (
+                payload.media_url
+                and normalized_content_type
+                and normalized_content_type.startswith("audio/")
+            ):
+                download_started_at = time.perf_counter()
+                audio_path = await _download_audio(
+                    payload.media_url,
+                    normalized_content_type,
+                    twilio_settings,
+                )
+                logger.info(
+                    "Incoming audio download completed in %.2fs",
+                    time.perf_counter() - download_started_at,
+                )
+            result = await onboard_trader(
+                phone_number,
+                audio_path,
+                normalized_content_type,
+                settings,
+            )
+            logger.info(
+                "Incoming onboarding message processed in %.2fs",
+                time.perf_counter() - started_at,
+            )
+            return result
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Incoming onboarding message failed")
+            return "processing failed"
+        finally:
+            if audio_path:
+                await _remove_file(Path(audio_path))
+
+
+@router.api_route("/media/{token}", methods=["GET", "HEAD"])
+async def serve_reply_audio(token: str) -> FileResponse:
+    """Serve an unexpired generated MP3 by opaque token."""
+    path = await get_media(token)
+    if path is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    return FileResponse(path, media_type="audio/mpeg", filename="reply.mp3")
+
+
+@router.post("/webhook", response_class=Response)
+async def receive_twilio_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+) -> Response:
+    """Validate a Twilio webhook, acknowledge it, then process it in background."""
     settings = _load_twilio_settings()
     try:
         form = await request.form()
@@ -281,35 +397,6 @@ async def receive_twilio_webhook(request: Request) -> WebhookResponse:
             detail=exc.errors(include_url=False),
         ) from exc
 
-    print(f"Received Twilio webhook: {payload}")
-    sender = payload.sender.removeprefix("whatsapp:")
-    if payload.media_url is None:
-        return WebhookResponse(
-            sender=sender,
-            media_url=None,
-            content_type=payload.content_type,
-            file_path=None,
-        )
-
-    normalized_content_type = (
-        payload.content_type.partition(";")[0].strip().lower()
-        if payload.content_type
-        else None
-    )
-    if not normalized_content_type or not normalized_content_type.startswith("audio/"):
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="MediaContentType0 must identify audio media.",
-        )
-
-    file_path = await _download_audio(
-        payload.media_url,
-        normalized_content_type,
-        settings,
-    )
-    return WebhookResponse(
-        sender=sender,
-        media_url=payload.media_url,
-        content_type=normalized_content_type,
-        file_path=file_path,
-    )
+    if await _claim_message(payload.message_sid):
+        background_tasks.add_task(_process_incoming_message, payload, settings)
+    return Response(content="<Response></Response>", media_type="application/xml")

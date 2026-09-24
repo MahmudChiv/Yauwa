@@ -21,9 +21,22 @@ class Settings(BaseSettings):
     twilio_account_sid: str
     twilio_auth_token: SecretStr
     twilio_whatsapp_number: str
+    twilio_webhook_url: HttpUrl
+    public_base_url: HttpUrl
     gemini_api_key: SecretStr
+    gemini_model: str
+    gemini_transcription_model: str = "gemini-3.5-transcribe"
     elevenlabs_api_key: SecretStr
     elevenlabs_voice_id: str
+    elevenlabs_model_id: str = "eleven_v3"
+
+    @field_validator("public_base_url")
+    @classmethod
+    def require_https_public_url(cls, value: HttpUrl) -> HttpUrl:
+        """Twilio must be able to fetch generated audio over public HTTPS."""
+        if value.scheme != "https":
+            raise ValueError("PUBLIC_BASE_URL must use HTTPS")
+        return value
 
 
 class TwilioSettings(BaseSettings):
