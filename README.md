@@ -36,7 +36,7 @@ main.py                 Existing FastAPI app and /health endpoint
 app/
   routes/routes.py      Existing /api/v1 router
   routes/webhook.py     Signed /api/v1/webhook receiver and audio downloader
-  models/              Trader, Item, Sale placeholders
+  models/              Trader, Item, and Sale SQLModel entities
   schemas/webhook.py   Incoming Twilio payload and response schemas
   ai/                  Extraction, reply generation, and TTS placeholders
   config.py            Settings and cached get_settings()
@@ -111,6 +111,7 @@ coding agent to read [GUIDE.md](GUIDE.md) before every task.
    | `GEMINI_API_KEY` | Your Google AI Studio API key |
    | `GEMINI_MODEL` | Gemini model for structured text decisions and Pidgin replies |
    | `GEMINI_TRANSCRIPTION_MODEL` | Dedicated audio transcription model; defaults to `gemini-3.5-transcribe` |
+   | `GEMINI_EXTRACTION_MODEL` | Gemini audio extraction model; defaults to `gemini-3.5-flash-lite` |
    | `ELEVENLABS_API_KEY` | Your ElevenLabs API key |
    | `ELEVENLABS_VOICE_ID` | The voice ID selected for your development account |
    | `ELEVENLABS_MODEL_ID` | Optional TTS model override; defaults to `eleven_v3` |

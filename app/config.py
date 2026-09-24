@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     gemini_api_key: SecretStr
     gemini_model: str
     gemini_transcription_model: str = "gemini-3.5-transcribe"
+    gemini_extraction_model: str = "gemini-3.5-flash-lite"
     elevenlabs_api_key: SecretStr
     elevenlabs_voice_id: str
     elevenlabs_model_id: str = "eleven_v3"

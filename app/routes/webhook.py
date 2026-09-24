@@ -21,7 +21,9 @@ from app.ai.onboarding import (
     onboarding_complete,
     onboard_trader,
     normalize_phone_number,
+    send_onboarding_reply,
 )
+from app.ai.extraction import process_trader_audio
 from app.ai.tts import get_media
 from app.config import Settings, TwilioSettings, get_settings, get_twilio_settings
 from app.db.session import get_engine
@@ -313,9 +315,7 @@ async def _process_incoming_message(
     async with lock:
         try:
             with Session(get_engine()) as session:
-                if onboarding_complete(session, phone_number):
-                    print(f"User {phone_number} already onboarded")
-                    return "user exist already"
+                is_onboarded = onboarding_complete(session, phone_number)
         except Exception:
             logger.exception("Trader lookup failed")
             return "processing failed"
@@ -343,21 +343,39 @@ async def _process_incoming_message(
                     "Incoming audio download completed in %.2fs",
                     time.perf_counter() - download_started_at,
                 )
-            result = await onboard_trader(
-                phone_number,
-                audio_path,
-                normalized_content_type,
-                settings,
-            )
+            if is_onboarded:
+                print(f"User {phone_number} already onboarded")
+                if audio_path and normalized_content_type:
+                    await process_trader_audio(
+                        phone_number,
+                        audio_path,
+                        normalized_content_type,
+                        settings,
+                    )
+                else:
+                    await send_onboarding_reply(
+                        phone_number,
+                        "Abeg send voice note about your shop stock or sales "
+                        "make I fit hear you well.",
+                        settings,
+                    )
+                result = "extraction processed"
+            else:
+                result = await onboard_trader(
+                    phone_number,
+                    audio_path,
+                    normalized_content_type,
+                    settings,
+                )
             logger.info(
-                "Incoming onboarding message processed in %.2fs",
+                "Incoming trader message processed in %.2fs",
                 time.perf_counter() - started_at,
             )
             return result
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("Incoming onboarding message failed")
+            logger.exception("Incoming trader message failed")
             return "processing failed"
         finally:
             if audio_path:

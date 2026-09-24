@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from functools import partial
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 from fastapi import HTTPException
@@ -14,7 +14,12 @@ from pydantic import ValidationError
 from twilio.request_validator import RequestValidator  # type: ignore[reportMissingImports]
 
 from app.config import TwilioSettings, get_twilio_settings
-from app.routes.webhook import MAX_AUDIO_BYTES, _download_audio, _seen_messages
+from app.routes.webhook import (
+    MAX_AUDIO_BYTES,
+    _download_audio,
+    _process_incoming_message,
+    _seen_messages,
+)
 from app.schemas.webhook import TwilioWebhookPayload
 from main import app
 
@@ -147,6 +152,119 @@ class WebhookTestCase(unittest.IsolatedAsyncioTestCase):
             response = await self.post(fields)
         self.assertEqual(response.status_code, 200)
         process.assert_awaited_once()
+
+
+class TraderRoutingTestCase(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.twilio_settings = TwilioSettings(
+            twilio_account_sid=ACCOUNT_SID,
+            twilio_auth_token=AUTH_TOKEN,
+            twilio_webhook_url=WEBHOOK_URL,
+        )
+        self.payload = TwilioWebhookPayload.model_validate(
+            {
+                "From": "whatsapp:+2348012345678",
+                "MessageSid": "SM-routing-test",
+                "MediaUrl0": MEDIA_URL,
+                "MediaContentType0": "audio/ogg",
+            }
+        )
+        self.settings = Mock()
+
+    async def test_onboarded_audio_reaches_extraction_and_is_cleaned(self) -> None:
+        with (
+            patch("app.routes.webhook.Session"),
+            patch("app.routes.webhook.get_engine"),
+            patch("app.routes.webhook.onboarding_complete", return_value=True),
+            patch("app.routes.webhook.get_settings", return_value=self.settings),
+            patch(
+                "app.routes.webhook._download_audio",
+                new=AsyncMock(return_value="/tmp/routing-test.ogg"),
+            ) as download,
+            patch(
+                "app.routes.webhook.process_trader_audio",
+                new=AsyncMock(return_value={"intent": "stock_intake"}),
+            ) as extract,
+            patch(
+                "app.routes.webhook.onboard_trader",
+                new=AsyncMock(),
+            ) as onboard,
+            patch(
+                "app.routes.webhook._remove_file",
+                new=AsyncMock(),
+            ) as cleanup,
+            patch("builtins.print"),
+        ):
+            result = await _process_incoming_message(
+                self.payload, self.twilio_settings
+            )
+
+        self.assertEqual(result, "extraction processed")
+        download.assert_awaited_once_with(MEDIA_URL, "audio/ogg", self.twilio_settings)
+        extract.assert_awaited_once_with(
+            "+2348012345678",
+            "/tmp/routing-test.ogg",
+            "audio/ogg",
+            self.settings,
+        )
+        onboard.assert_not_awaited()
+        cleanup.assert_awaited_once_with(Path("/tmp/routing-test.ogg"))
+
+    async def test_incomplete_trader_still_uses_onboarding(self) -> None:
+        with (
+            patch("app.routes.webhook.Session"),
+            patch("app.routes.webhook.get_engine"),
+            patch("app.routes.webhook.onboarding_complete", return_value=False),
+            patch("app.routes.webhook.get_settings", return_value=self.settings),
+            patch(
+                "app.routes.webhook._download_audio",
+                new=AsyncMock(return_value="/tmp/routing-test.ogg"),
+            ),
+            patch(
+                "app.routes.webhook.process_trader_audio",
+                new=AsyncMock(),
+            ) as extract,
+            patch(
+                "app.routes.webhook.onboard_trader",
+                new=AsyncMock(return_value="onboarding pending"),
+            ) as onboard,
+            patch("app.routes.webhook._remove_file", new=AsyncMock()),
+        ):
+            result = await _process_incoming_message(
+                self.payload, self.twilio_settings
+            )
+
+        self.assertEqual(result, "onboarding pending")
+        onboard.assert_awaited_once_with(
+            "+2348012345678",
+            "/tmp/routing-test.ogg",
+            "audio/ogg",
+            self.settings,
+        )
+        extract.assert_not_awaited()
+
+    async def test_onboarded_text_requests_voice_note(self) -> None:
+        payload = self.payload.model_copy(
+            update={"media_url": None, "content_type": None}
+        )
+        with (
+            patch("app.routes.webhook.Session"),
+            patch("app.routes.webhook.get_engine"),
+            patch("app.routes.webhook.onboarding_complete", return_value=True),
+            patch("app.routes.webhook.get_settings", return_value=self.settings),
+            patch("app.routes.webhook.process_trader_audio", new=AsyncMock()) as extract,
+            patch(
+                "app.routes.webhook.send_onboarding_reply",
+                new=AsyncMock(),
+            ) as reply,
+            patch("builtins.print"),
+        ):
+            result = await _process_incoming_message(payload, self.twilio_settings)
+
+        self.assertEqual(result, "extraction processed")
+        extract.assert_not_awaited()
+        self.assertIn("voice note", reply.await_args.args[1])
+
 class AudioDownloadTestCase(unittest.IsolatedAsyncioTestCase):
     """Exercise streaming, authentication, limits, and temporary-file cleanup."""
 
