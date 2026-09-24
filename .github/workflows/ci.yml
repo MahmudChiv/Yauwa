@@ -33,7 +33,17 @@ jobs:
           cache: pip
       - run: python -m pip install -r requirements.txt
       - run: python -m pip check
-      - run: python -m unittest app.routes.test_webhook
+      - name: Run application and sales regression tests
+        run: >-
+          python -m unittest
+          app.routes.test_webhook
+          app.ai.test_extraction
+          app.ai.test_generation
+          app.ai.test_onboarding
+          app.ai.test_tts
+          app.models.test_inventory_models
+          app.db.test_ledger
+          app.db.test_sales_flow
       - name: Import infrastructure and check app startup
         shell: bash
         run: |

@@ -3,7 +3,6 @@
 import asyncio
 import json
 import logging
-import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,7 +15,10 @@ from sqlmodel import Session
 
 from app.ai.onboarding import get_trader_by_phone, send_onboarding_reply
 from app.config import Settings, get_settings
+from app.db.ledger import record_sales
+from app.db.money import money, sale_total
 from app.db.session import get_engine
+from app.models.trader import Trader
 from app.services.inventory import save_stock_items
 
 logger = logging.getLogger(__name__)
@@ -261,6 +263,11 @@ Sale rules:
 - "I sold 3 biscuits for 300" is ambiguous unless the trader makes clear
   whether 300 is each or the total. Ask for clarification.
 - Do not divide one amount across different products.
+- buyer_name is optional. If no buyer is mentioned, return null.
+- Never ask who bought an item or request a buyer's name.
+- A missing or unclear buyer name must not cause needs_clarification.
+- If the product, quantity, and selling prices are clear, the sale can
+  be ready with buyer_name null.
 
 Status rules:
 - ready requires exactly one supported intent and at least one corresponding
@@ -287,6 +294,9 @@ Examples:
 - "I sold 4.5 biscuits": sale, needs_clarification. Ask for the whole number of
   biscuits sold.
 - "I sold eggs": sale, needs_clarification. Ask for quantity and selling price.
+- "I sold three biscuits for 100 naira each":
+sale, ready; item_name Biscuit, quantity 3, unit_price 100,
+total_price 300, buyer_name null, reply_text null.
 """
 
 
@@ -331,7 +341,6 @@ def _stock_size_question(items: list[StockItem]) -> str:
         )
     return "Abeg tell me " + ", and ".join(missing) + "."
 
-
 def _validate_result(result: ExtractionResult) -> ExtractionResult:
     """Enforce stock and sale rules before the result reaches the webhook."""
     if result.intent == "unknown":
@@ -365,15 +374,11 @@ def _validate_result(result: ExtractionResult) -> ExtractionResult:
             if sale.unit_price is None:
                 missing.append(f"unit price for {sale.item_name}")
             if sale.quantity is not None and sale.unit_price is not None:
-                expected_total = sale.quantity * sale.unit_price
-                if sale.total_price is None:
-                    sale.total_price = expected_total
-                elif not math.isclose(
-                    sale.total_price,
-                    expected_total,
-                    rel_tol=1e-9,
-                    abs_tol=0.01,
-                ):
+                expected_total = sale_total(sale.unit_price, sale.quantity)
+                if sale.total_price is None or money(sale.total_price) == expected_total:
+                    sale.unit_price = float(money(sale.unit_price))
+                    sale.total_price = float(expected_total)
+                else:
                     missing.append(f"correct total price for {sale.item_name}")
             elif sale.total_price is None:
                 missing.append(f"total price for {sale.item_name}")
@@ -609,6 +614,25 @@ def _print_stock_rows(phone_number: str, items: list[StockItem]) -> dict:
     print(f"Item rows for database (not saved): {rows}")
     return rows
 
+def _save_extracted_sales(phone_number: str, sales: list[dict]) -> dict:
+    from sqlmodel import select
+
+    from app.ai.onboarding import normalize_phone_number
+
+    with Session(get_engine()) as lookup_session:
+        trader = lookup_session.exec(
+            select(Trader).where(
+                Trader.phone_number == normalize_phone_number(phone_number)
+            )
+        ).one_or_none()
+
+        if trader is None or trader.id is None:
+            raise ValueError("Trader was not found.")
+
+        trader_id = trader.id
+
+    with Session(get_engine()) as write_session:
+        return record_sales(write_session, trader_id, sales)
 
 def _resolve_trader_id(phone_number: str) -> int | None:
     """Look up the trader ID for this conversation's phone number."""
@@ -749,18 +773,43 @@ async def process_trader_audio(
                     )
     reply = result["reply_text"]
     if result["status"] == "ready":
-        if result["intent"] == "stock_intake":
+        if result["intent"] == "sale":
+            try:
+                summary = await asyncio.to_thread(
+                    _save_extracted_sales,
+                    phone_number,
+                    result["sales"],
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Could not record the sale batch")
+                reply = (
+                    "I no fit confirm say these sales don save. "
+                    "Abeg make we check the record before you send am again."
+                )
+            else:
+                if summary["unmatched_items"]:
+                    reply = (
+                        "I don record your sales, but some items no match "
+                        "your stock list, so I no reduce their stock."
+                    )
+                else:
+                    reply = "I don record your sales and update your stock."
+        else:
             reply = (
                 "Yauwa, I don hear your goods and I don save am."
                 if stock_saved
                 else "Yauwa, I don hear your goods. I never save am yet; I dey test am."
             )
-        else:
-            reply = "Yauwa, I don hear your sales. I never save am yet; I dey test am."
+
+    result["reply_text"] = reply
+
     if reply:
         await send_onboarding_reply(
             phone_number,
             reply,
             effective_settings,
         )
+
     return result
