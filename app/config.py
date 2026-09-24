@@ -84,6 +84,7 @@ class DatabaseSettings(BaseSettings):
     )
 
     database_url: PostgresDsn
+    test_database_url: PostgresDsn | None = None
 
 
 @lru_cache(maxsize=1)
