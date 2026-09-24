@@ -1,8 +1,8 @@
 """SQLModel class for the Item entity.
 
 An Item represents a product that a specific trader stocks and sells.
-Each row tracks the current quantity on hand and the unit price so the bot
-can report stock levels and warn the trader when stock runs low.
+Each row tracks the current whole-unit quantity and any bulk packaging the
+trader used while stating their opening stock.
 """
 
 from datetime import datetime, timezone
@@ -25,14 +25,18 @@ class Item(SQLModel, table=True):
     # The AI extracts this from voice input, so spelling may vary — normalise upstream.
     item_name: str
 
-    # How many units the trader currently has in stock.
-    # Float to support fractional units (e.g. kg, litres).
-    quantity: float
+    # Total individual sellable units. It remains unknown until the trader
+    # confirms how many pieces are inside each bulk package.
+    unit_quantity: int | None = Field(default=None, nullable=True)
 
-    # The price the trader charges per unit, in Naira.
-    unit_price: float
+    # Optional package description from opening stock, e.g. 3 packs or 10 bags.
+    bulk_type: str | None = Field(default=None, nullable=True)
+    bulk_quantity: int | None = Field(default=None, nullable=True)
 
-    # When stock falls to or below this number the bot sends a restock alert.
+    # Selling price can be collected later without blocking stock capture.
+    unit_price: float | None = Field(default=None, nullable=True)
+
+    # When unit quantity falls to or below this number, notify the trader.
     low_stock_threshold: float
 
     # When this row was last changed. Defaults to "now" in UTC.

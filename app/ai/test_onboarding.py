@@ -223,7 +223,7 @@ class OnboardingFlowTestCase(unittest.IsolatedAsyncioTestCase):
         send.assert_called_once()
         self.assertEqual(send.call_args.kwargs["body"], "Abeg try again")
 
-    async def test_completed_trader_skips_download_and_ai(self) -> None:
+    async def test_completed_trader_routes_audio_to_extraction(self) -> None:
         with Session(self.engine) as session:
             session.add(
                 Trader(phone_number="+2348000000004", name="Zainab", language="pidgin")
@@ -237,13 +237,31 @@ class OnboardingFlowTestCase(unittest.IsolatedAsyncioTestCase):
                 "MediaContentType0": "audio/ogg",
             }
         )
+        settings = Mock()
         with (
             patch("app.routes.webhook.get_engine", return_value=self.engine),
-            patch("app.routes.webhook._download_audio", new=AsyncMock()) as download,
+            patch("app.routes.webhook.get_settings", return_value=settings),
+            patch(
+                "app.routes.webhook._download_audio",
+                new=AsyncMock(return_value="/tmp/completed-trader.ogg"),
+            ) as download,
+            patch(
+                "app.routes.webhook.process_trader_audio",
+                new=AsyncMock(return_value={"intent": "sale"}),
+            ) as extract,
+            patch("app.routes.webhook._remove_file", new=AsyncMock()) as cleanup,
+            patch("builtins.print"),
         ):
             result = await _process_incoming_message(payload, object())
-        self.assertEqual(result, "user exist already")
-        download.assert_not_awaited()
+        self.assertEqual(result, "extraction processed")
+        download.assert_awaited_once()
+        extract.assert_awaited_once_with(
+            "+2348000000004",
+            "/tmp/completed-trader.ogg",
+            "audio/ogg",
+            settings,
+        )
+        cleanup.assert_awaited_once_with(Path("/tmp/completed-trader.ogg"))
 
 
 class TemporaryMediaTestCase(unittest.IsolatedAsyncioTestCase):

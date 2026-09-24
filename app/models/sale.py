@@ -24,13 +24,13 @@ class Sale(SQLModel, table=True):
     # The name of the product sold, extracted from the trader's voice message.
     item_name: str
 
-    # Number of units sold in this transaction.
-    quantity: float
+    # Number of individual retail units sold in this transaction.
+    quantity: int
 
-    # Price per unit at the time of sale (may differ from current Item.unit_price).
+    # Selling price for one unit at the time of sale.
     unit_price: float
 
-    # Pre-computed total: quantity × unit_price. Stored so queries stay simple.
+    # Pre-computed total: quantity multiplied by unit price.
     total_price: float
 
     # Optional name of the person who bought the item.
