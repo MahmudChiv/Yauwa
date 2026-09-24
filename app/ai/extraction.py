@@ -3,7 +3,6 @@
 import asyncio
 import json
 import logging
-import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -342,34 +341,6 @@ def _stock_size_question(items: list[StockItem]) -> str:
         )
     return "Abeg tell me " + ", and ".join(missing) + "."
 
-
-def _is_buyer_only_question(result: ExtractionResult) -> bool:
-    """Recognize a narrow buyer-only question without dismissing other doubts.
-
-    Unknown wording deliberately stays a clarification. Do not turn every
-    numerically complete extraction into a ready sale: semantic doubts can
-    remain even when the model has supplied numbers.
-    """
-    if not result.reply_text:
-        return False
-    question = " ".join(result.reply_text.casefold().split()).strip(" .?!")
-    match = re.fullmatch(
-        r"(?:abeg[, ]+)?who (?:buy|bought) (?:the |dis |this |these )?"
-        r"(.+?)(?: make i put am)?",
-        question,
-    )
-    if not match:
-        return False
-    subject = match.group(1).strip()
-    # Only a known product may fill the subject slot. A question mentioning
-    # quantity, price, or a second clause will not match a product name.
-    return any(
-        subject == " ".join(sale.item_name.casefold().split())
-        for sale in result.sales
-        if sale.buyer_name is None
-    )
-
-
 def _validate_result(result: ExtractionResult) -> ExtractionResult:
     """Enforce stock and sale rules before the result reaches the webhook."""
     if result.intent == "unknown":
@@ -411,17 +382,6 @@ def _validate_result(result: ExtractionResult) -> ExtractionResult:
                     missing.append(f"correct total price for {sale.item_name}")
             elif sale.total_price is None:
                 missing.append(f"total price for {sale.item_name}")
-
-    if (
-        result.intent == "sale"
-        and result.status == "needs_clarification"
-        and not missing
-        and _is_buyer_only_question(result)
-    ):
-        # An omitted buyer is valid. All mandatory sale values were checked
-        # above, and this recognized question asks for no other information.
-        result.status = "ready"
-        result.reply_text = None
 
     if result.status == "ready" and missing:
         result.status = "needs_clarification"
