@@ -29,7 +29,7 @@ update → Gemini reply generation, Pidgin only → ElevenLabs TTS → sent back
 - pydantic-settings: centralized environment configuration.
 - Gemini (`google-genai`): transcription, extraction, and reply generation.
 - ElevenLabs: TTS only; Twilio: WhatsApp transport. HTTPX is available for HTTP calls.
-- Ruff and GitHub Actions: lint and startup checks; Render: deployment.
+- Ruff and GitHub Actions: lint and startup checks; Railway: deployment.
 
 ```text
 main.py                 Existing FastAPI app and /health endpoint
@@ -107,9 +107,13 @@ coding agent to read [GUIDE.md](GUIDE.md) before every task.
    | `TWILIO_AUTH_TOKEN` | Your Twilio auth token |
    | `TWILIO_WHATSAPP_NUMBER` | Your Twilio sender, with `whatsapp:` prefix and international number |
    | `TWILIO_WEBHOOK_URL` | Exact public HTTPS URL Twilio calls, ending in `/api/v1/webhook` |
+   | `PUBLIC_BASE_URL` | Public HTTPS origin where Twilio can fetch generated reply audio |
    | `GEMINI_API_KEY` | Your Google AI Studio API key |
+   | `GEMINI_MODEL` | Gemini model for structured text decisions and Pidgin replies |
+   | `GEMINI_TRANSCRIPTION_MODEL` | Dedicated audio transcription model; defaults to `gemini-3.5-transcribe` |
    | `ELEVENLABS_API_KEY` | Your ElevenLabs API key |
    | `ELEVENLABS_VOICE_ID` | The voice ID selected for your development account |
+   | `ELEVENLABS_MODEL_ID` | Optional TTS model override; defaults to `eleven_v3` |
 
    Provider setup: [Gemini](https://ai.google.dev/gemini-api/docs/get-started),
    [Twilio WhatsApp Sandbox](https://www.twilio.com/docs/whatsapp/sandbox),
@@ -213,17 +217,17 @@ required human approval.
 
 ## Deployment setup for the repository owner
 
-Connect a Render web service to this GitHub repository and select branch `main`:
+Connect a Railway web service to this GitHub repository and select branch `main`:
 
-- Runtime: Python 3.12 (set Render's `PYTHON_VERSION` to a supported 3.12 patch).
+- Runtime: Python 3.12 (set Railway's `PYTHON_VERSION` to a supported 3.12 patch).
 - Build command: `pip install -r requirements.txt`.
 - Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`.
 - Health check path: `/health`.
 - Auto-deploy: **After CI Checks Pass**.
-- Set the eight application variables in Render's environment settings using
+- Set the application variables in Railway's environment settings using
   deployment credentials and the deployment PostgreSQL URL; do not upload `.env`.
 
-Render's [native GitHub integration](https://render.com/docs/deploys) handles
+Railway's [native GitHub integration](https://Railway.com/docs/deploys) handles
 deployment after changes merge to `main` and checks pass. GitHub Actions is the
-merge gate, not the deployment runner. Render setup is an administrator step
+merge gate, not the deployment runner. Railway setup is an administrator step
 and has not been activated by this scaffold.

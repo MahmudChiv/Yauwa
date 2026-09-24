@@ -22,7 +22,7 @@ class Trader(SQLModel, table=True):
     phone_number: str = Field(unique=True, index=True)
 
     # The trader's display name (used when the bot greets them).
-    name: str
+    name: str | None = Field(default=None, nullable=True)
 
     # Preferred reply language code, e.g. "pidgin".
     # The AI layer reads this to pick the right reply style.

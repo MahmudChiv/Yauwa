@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from twilio.request_validator import RequestValidator  # type: ignore[reportMissingImports]
 
 from app.config import TwilioSettings, get_twilio_settings
-from app.routes.webhook import MAX_AUDIO_BYTES, _download_audio
+from app.routes.webhook import MAX_AUDIO_BYTES, _download_audio, _seen_messages
 from app.schemas.webhook import TwilioWebhookPayload
 from main import app
 
@@ -39,7 +39,7 @@ class ChunkStream(httpx.AsyncByteStream):
 
 
 class WebhookTestCase(unittest.IsolatedAsyncioTestCase):
-    """Exercise request authentication and response behavior through the ASGI app."""
+    """Exercise authentication, acknowledgement, and background dispatch."""
 
     def setUp(self) -> None:
         self.environment = patch.dict(
@@ -53,9 +53,11 @@ class WebhookTestCase(unittest.IsolatedAsyncioTestCase):
         )
         self.environment.start()
         get_twilio_settings.cache_clear()
+        _seen_messages.clear()
 
     def tearDown(self) -> None:
         get_twilio_settings.cache_clear()
+        _seen_messages.clear()
         self.environment.stop()
 
     @staticmethod
@@ -64,43 +66,36 @@ class WebhookTestCase(unittest.IsolatedAsyncioTestCase):
         return {"X-Twilio-Signature": signature}
 
     async def post(self, fields: dict[str, str], signature_fields=None) -> httpx.Response:
+        fields = {"MessageSid": "SM-test-message", **fields}
         headers = self.signed_headers(signature_fields or fields)
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app),
-            base_url="http://test",
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
             return await client.post("/api/v1/webhook", data=fields, headers=headers)
 
-    async def test_text_message_returns_null_path(self) -> None:
+    async def test_acknowledges_and_dispatches_in_background(self) -> None:
         fields = {"From": "whatsapp:+2348012345678", "Body": "How far?"}
-        response = await self.post(fields)
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(
-            response.json(),
-            {
-                "sender": "+2348012345678",
-                "media_url": None,
-                "content_type": None,
-                "file_path": None,
-            },
-        )
-
-    async def test_audio_message_returns_downloaded_path(self) -> None:
-        fields = {
-            "From": "whatsapp:+2348012345678",
-            "MediaUrl0": MEDIA_URL,
-            "MediaContentType0": "audio/ogg; codecs=opus",
-            "MessageSid": "SM-extra-signed-field",
-        }
         with patch(
-            "app.routes.webhook._download_audio",
-            new=AsyncMock(return_value="/tmp/yauwa-example.ogg"),
-        ) as download:
+            "app.routes.webhook._process_incoming_message",
+            new=AsyncMock(return_value="onboarding pending"),
+        ) as process:
             response = await self.post(fields)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["content_type"], "audio/ogg")
-        self.assertEqual(response.json()["file_path"], "/tmp/yauwa-example.ogg")
-        download.assert_awaited_once()
+        self.assertEqual(response.text, "<Response></Response>")
+        self.assertTrue(response.headers["content-type"].startswith("application/xml"))
+        process.assert_awaited_once()
+
+    async def test_duplicate_message_sid_is_dispatched_once(self) -> None:
+        fields = {"From": "whatsapp:+2348012345678"}
+        with patch(
+            "app.routes.webhook._process_incoming_message",
+            new=AsyncMock(return_value="onboarding pending"),
+        ) as process:
+            first = await self.post(fields)
+            second = await self.post(fields)
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        process.assert_awaited_once()
 
     async def test_signature_covers_extra_form_fields(self) -> None:
         fields = {"From": "whatsapp:+2348012345678", "Body": "signed too"}
@@ -113,7 +108,7 @@ class WebhookTestCase(unittest.IsolatedAsyncioTestCase):
         ) as client:
             response = await client.post(
                 "/api/v1/webhook",
-                data={"From": "whatsapp:+2348012345678"},
+                data={"From": "whatsapp:+2348012345678", "MessageSid": "SM1"},
                 headers={"X-Twilio-Signature": "not-valid"},
             )
         self.assertEqual(response.status_code, 403)
@@ -131,33 +126,27 @@ class WebhookTestCase(unittest.IsolatedAsyncioTestCase):
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://test"
             ) as client:
-                response = await client.post(
-                    "/api/v1/webhook", data={"From": "+234"}
-                )
+                response = await client.post("/api/v1/webhook", data={"From": "+234"})
         self.assertEqual(response.status_code, 503)
         self.assertNotIn(AUTH_TOKEN, response.text)
 
-    async def test_payload_errors_and_non_audio_media(self) -> None:
-        missing_sender = {"Body": "hello"}
-        response = await self.post(missing_sender)
+    async def test_payload_errors_are_rejected(self) -> None:
+        response = await self.post({"Body": "hello"})
         self.assertEqual(response.status_code, 422)
 
-        non_audio = {
+    async def test_non_audio_media_is_accepted_for_voice_prompt(self) -> None:
+        fields = {
             "From": "whatsapp:+2348012345678",
             "MediaUrl0": MEDIA_URL,
             "MediaContentType0": "image/jpeg",
         }
-        response = await self.post(non_audio)
-        self.assertEqual(response.status_code, 415)
-
-        missing_type = {
-            "From": "whatsapp:+2348012345678",
-            "MediaUrl0": MEDIA_URL,
-        }
-        response = await self.post(missing_type)
-        self.assertEqual(response.status_code, 415)
-
-
+        with patch(
+            "app.routes.webhook._process_incoming_message",
+            new=AsyncMock(return_value="onboarding pending"),
+        ) as process:
+            response = await self.post(fields)
+        self.assertEqual(response.status_code, 200)
+        process.assert_awaited_once()
 class AudioDownloadTestCase(unittest.IsolatedAsyncioTestCase):
     """Exercise streaming, authentication, limits, and temporary-file cleanup."""
 
@@ -307,12 +296,14 @@ class SchemaAndSettingsTestCase(unittest.TestCase):
         payload = TwilioWebhookPayload.model_validate(
             {
                 "From": " whatsapp:+2348012345678 ",
+                "MessageSid": " SM-schema ",
                 "MediaUrl0": " ",
                 "MediaContentType0": "",
                 "Body": "ignored",
             }
         )
         self.assertEqual(payload.sender, "whatsapp:+2348012345678")
+        self.assertEqual(payload.message_sid, "SM-schema")
         self.assertIsNone(payload.media_url)
         self.assertIsNone(payload.content_type)
 
