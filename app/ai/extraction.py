@@ -12,9 +12,12 @@ from typing import Literal
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from sqlmodel import Session
 
-from app.ai.onboarding import send_onboarding_reply
+from app.ai.onboarding import get_trader_by_phone, send_onboarding_reply
 from app.config import Settings, get_settings
+from app.db.session import get_engine
+from app.services.inventory import save_stock_items
 
 logger = logging.getLogger(__name__)
 UPLOAD_TIMEOUT_SECONDS = 30
@@ -607,14 +610,29 @@ def _print_stock_rows(phone_number: str, items: list[StockItem]) -> dict:
     return rows
 
 
+def _resolve_trader_id(phone_number: str) -> int | None:
+    """Look up the trader ID for this conversation's phone number."""
+    try:
+        with Session(get_engine()) as session:
+            trader = get_trader_by_phone(session, phone_number)
+            return trader.id if trader else None
+    except Exception:
+        logger.exception("Could not look up trader ID for phone %s", phone_number)
+        return None
+
+
 async def process_trader_audio(
     phone_number: str,
     audio_path: str | Path,
     content_type: str,
     settings: Settings | None = None,
+    trader_id: int | None = None,
 ) -> dict | None:
     """Extract and print a trader message, speaking any required follow-up."""
     effective_settings = settings or get_settings()
+    resolved_trader_id = (
+        trader_id if trader_id is not None else _resolve_trader_id(phone_number)
+    )
     pending = _get_pending_stock(phone_number)
     if pending is not None:
         try:
@@ -652,10 +670,30 @@ async def process_trader_audio(
 
             _pending_stock.pop(phone_number, None)
             rows = _print_stock_rows(phone_number, pending.items)
+            items_to_save = rows.get("items", [])
+            saved = False
+            if items_to_save and resolved_trader_id is not None:
+                try:
+                    save_stock_items(resolved_trader_id, items_to_save)
+                    saved = True
+                except Exception:
+                    logger.exception(
+                        "Failed to save bulk stock items for trader %s",
+                        resolved_trader_id,
+                    )
+
+            if saved:
+                reply = (
+                    "Yauwa, I don calculate the pieces for your goods and I don save am."
+                )
+            else:
+                reply = (
+                    "Yauwa, I don calculate the pieces for your goods. "
+                    "I never save am yet; I dey test the stock list."
+                )
             await send_onboarding_reply(
                 phone_number,
-                "Yauwa, I don calculate the pieces for your goods. "
-                "I never save am yet; I dey test the stock list.",
+                reply,
                 effective_settings,
             )
             return rows
@@ -686,6 +724,7 @@ async def process_trader_audio(
     print(f"Gemini stock and sales extraction: {result}")
     if pending is not None and answer.status == "new_message":
         _pending_stock.pop(phone_number, None)
+    stock_saved = False
     if result["intent"] == "stock_intake":
         items = [StockItem.model_validate(item) for item in result["stock_items"]]
         for item in items:
@@ -697,14 +736,27 @@ async def process_trader_audio(
             _pending_stock[phone_number] = PendingStock(items, time.monotonic())
             result["reply_text"] = _stock_size_question(missing)
         elif result["status"] == "ready":
-            _print_stock_rows(phone_number, items)
+            rows = _print_stock_rows(phone_number, items)
+            items_to_save = rows.get("items", [])
+            if items_to_save and resolved_trader_id is not None:
+                try:
+                    save_stock_items(resolved_trader_id, items_to_save)
+                    stock_saved = True
+                except Exception:
+                    logger.exception(
+                        "Failed to save stock items for trader %s",
+                        resolved_trader_id,
+                    )
     reply = result["reply_text"]
     if result["status"] == "ready":
-        reply = (
-            "Yauwa, I don hear your goods. I never save am yet; I dey test am."
-            if result["intent"] == "stock_intake"
-            else "Yauwa, I don hear your sales. I never save am yet; I dey test am."
-        )
+        if result["intent"] == "stock_intake":
+            reply = (
+                "Yauwa, I don hear your goods and I don save am."
+                if stock_saved
+                else "Yauwa, I don hear your goods. I never save am yet; I dey test am."
+            )
+        else:
+            reply = "Yauwa, I don hear your sales. I never save am yet; I dey test am."
     if reply:
         await send_onboarding_reply(
             phone_number,
