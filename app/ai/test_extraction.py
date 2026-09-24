@@ -201,6 +201,7 @@ class ExtractionValidationTestCase(unittest.TestCase):
 
 class GeminiExtractionTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
+        self.enterContext(patch("app.ai.extraction._resolve_trader_id", return_value=None))
         _pending_stock.clear()
         self.settings = Mock()
         self.settings.gemini_api_key.get_secret_value.return_value = "secret"
