@@ -10,6 +10,7 @@ from sqlmodel import Session, select
 
 from app.db.money import money, sale_total
 from app.models.item import Item
+from app.models.low_stock_item import LowStockItem
 from app.models.sale import Sale
 from app.models.trader import Trader
 
@@ -89,6 +90,8 @@ def record_sales(
         if trader is None:
             raise SaleWriteError("Trader does not exist.")
 
+        trader_name = trader.name
+
         for sale, total in zip(validated, totals):
             # Case-insensitive exact match within this trader's inventory.
             # No fuzzy guessing between brands or similar products.
@@ -110,6 +113,7 @@ def record_sales(
 
             item = matches[0] if matches else None
             remaining_quantity = None
+            alert_needed = False
 
             if item is not None:
                 if item.unit_quantity is None:
@@ -125,6 +129,13 @@ def record_sales(
                 item.unit_quantity -= sale.quantity
                 item.last_updated = datetime.now(timezone.utc)
                 remaining_quantity = item.unit_quantity
+                if item.unit_quantity is not None and item.unit_quantity <= item.low_stock_threshold:
+                    already_low = session.exec(
+                        select(LowStockItem).where(LowStockItem.item_id == item.id)
+                    ).first()
+                    if already_low is None:
+                        session.add(LowStockItem(item_id=item.id, trader_id=trader_id))
+                        alert_needed = True
                 session.add(item)
             else:
                 unmatched_items.append(sale.item_name)
@@ -151,6 +162,8 @@ def record_sales(
                     "total_price": row.total_price,
                     "stock_adjusted": item is not None,
                     "remaining_quantity": remaining_quantity,
+                    "alert_needed": alert_needed,
+                    "trader_name": trader_name,
                 }
             )
 

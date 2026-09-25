@@ -611,7 +611,7 @@ def _print_stock_rows(phone_number: str, items: list[StockItem]) -> dict:
             for item in items
         ],
     }
-    print(f"Item rows for database (not saved): {rows}")
+    print(f"Item rows for database (now saved via save_stock_items): {rows}")
     return rows
 
 def _save_extracted_sales(phone_number: str, sales: list[dict]) -> dict:
@@ -796,6 +796,31 @@ async def process_trader_audio(
                     )
                 else:
                     reply = "I don record your sales and update your stock."
+
+                for sale in summary.get("sales", []):
+                    if sale.get("alert_needed"):
+                        name = sale.get("trader_name") or "Oga"
+                        remaining = sale.get("remaining_quantity") or 0
+                        item_name = sale.get("item_name")
+
+                        if remaining <= 0:
+                            alert_text = (
+                                f"{name}, your {item_name} don finish completely. "
+                                "You no get any remain. Make you go market buy more."
+                            )
+                        else:
+                            alert_text = (
+                                f"{name}, your {item_name} don dey finish. "
+                                f"Only {remaining} remain. "
+                                "Make you go market buy more before customers finish am."
+                            )
+
+                        try:
+                            await send_onboarding_reply(
+                                phone_number, alert_text, effective_settings
+                            )
+                        except Exception:
+                            logger.exception("Low-stock alert send failed")
         else:
             reply = (
                 "Yauwa, I don hear your goods and I don save am."

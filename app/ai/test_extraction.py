@@ -428,7 +428,7 @@ class GeminiExtractionTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows["items"][0]["bulk_type"], "carton")
         self.assertEqual(rows["items"][2]["item_name"], "Danono milk")
         self.assertIsNone(rows["items"][0]["unit_price"])
-        self.assertIn("not saved", print_result.call_args.args[0])
+        self.assertIn("now saved via save_stock_items", print_result.call_args.args[0])
         self.assertEqual(extract.await_count, 1)
         extract_sizes.assert_awaited_once()
         self.assertEqual(send_reply.await_count, 2)
