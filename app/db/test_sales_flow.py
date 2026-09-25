@@ -107,6 +107,17 @@ class SalesPersistenceTestCase(DatabaseFixture, unittest.TestCase):
         self.assertEqual(result["unmatched_items"], [])
         self.assertEqual(self.snapshot()[0], 7)
 
+    def test_plural_and_spacing_flexible_match(self):
+        # Singular "Cabin biscuit" matches inventory "Cabin biscuits"
+        result1 = self.write([sale(item_name="Cabin biscuit")])
+        self.assertEqual(result1["unmatched_items"], [])
+        self.assertEqual(self.snapshot()[0], 7)
+
+        # Space-collapsed "cabinbiscuits" matches inventory "Cabin biscuits"
+        result2 = self.write([sale(item_name="cabinbiscuits")])
+        self.assertEqual(result2["unmatched_items"], [])
+        self.assertEqual(self.snapshot()[0], 4)
+
     def test_unknown_product_is_saved_and_logged_without_stock_change(self):
         with self.assertLogs("app.db.ledger", level="WARNING") as logs:
             result = self.write([sale(item_name="Eggs")])

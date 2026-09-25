@@ -1,11 +1,11 @@
 """Record validated sales and decrement a trader's inventory."""
 
 import logging
+import re
 from datetime import datetime, timezone
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.db.money import money, sale_total
@@ -15,6 +15,36 @@ from app.models.sale import Sale
 from app.models.trader import Trader
 
 logger = logging.getLogger(__name__)
+
+_NUMBER_WORDS = {
+    "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
+    "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
+    "ten": "10", "eleven": "11", "twelve": "12", "thirteen": "13",
+    "fourteen": "14", "fifteen": "15", "sixteen": "16", "seventeen": "17",
+    "eighteen": "18", "nineteen": "19", "twenty": "20", "thirty": "30",
+    "forty": "40", "fifty": "50", "sixty": "60", "seventy": "70",
+    "eighty": "80", "ninety": "90", "hundred": "100",
+}
+
+
+def _normalize_item_key(name: str) -> str:
+    """Normalize item name for flexible matching (lowercase, no spaces/punctuation, singularized)."""
+    s = name.lower()
+    s = re.sub(r'\bninety\s*one\b', '91', s)
+    s = re.sub(r'\bninety\s*two\b', '92', s)
+    s = re.sub(r'\bninety\s*three\b', '93', s)
+    s = re.sub(r'\bninety\s*four\b', '94', s)
+    s = re.sub(r'\bninety\s*five\b', '95', s)
+    s = re.sub(r'\bninety\s*six\b', '96', s)
+    s = re.sub(r'\bninety\s*seven\b', '97', s)
+    s = re.sub(r'\bninety\s*eight\b', '98', s)
+    s = re.sub(r'\bninety\s*nine\b', '99', s)
+    for word, digit in _NUMBER_WORDS.items():
+        s = re.sub(r'\b' + word + r'\b', digit, s)
+    s = re.sub(r'[^a-z0-9]', '', s)
+    if len(s) > 3 and s.endswith('s') and not s.endswith('ss'):
+        s = s[:-1]
+    return s
 
 
 class SaleWriteError(ValueError):
@@ -92,19 +122,27 @@ def record_sales(
 
         trader_name = trader.name
 
+        trader_items = session.exec(
+            select(Item)
+            .where(Item.trader_id == trader_id)
+            .order_by(Item.id)
+            .with_for_update()
+        ).all()
+
         for sale, total in zip(validated, totals):
-            # Case-insensitive exact match within this trader's inventory.
-            # No fuzzy guessing between brands or similar products.
-            matches = session.exec(
-                select(Item)
-                .where(
-                    Item.trader_id == trader_id,
-                    func.lower(func.trim(Item.item_name))
-                    == sale.item_name.lower(),
-                )
-                .order_by(Item.id)
-                .with_for_update()
-            ).all()
+            # 1. Exact case-insensitive match within trader's inventory
+            matches = [
+                item for item in trader_items
+                if item.item_name.strip().lower() == sale.item_name.strip().lower()
+            ]
+
+            # 2. Flexible normalized match (spacing, singular/plural, number formats)
+            if not matches:
+                sale_norm = _normalize_item_key(sale.item_name)
+                matches = [
+                    item for item in trader_items
+                    if _normalize_item_key(item.item_name) == sale_norm
+                ]
 
             if len(matches) > 1:
                 raise SaleWriteError(
