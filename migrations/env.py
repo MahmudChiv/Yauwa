@@ -16,7 +16,7 @@ from sqlmodel import SQLModel
 # Importing every model module is required. Without these imports, the
 # model classes never register into SQLModel.metadata, and Alembic would
 # autogenerate an empty migration.
-from app.models import item, sale, trader  # noqa: F401
+from app.models import item, low_stock_item, sale, trader  # noqa: F401
 from app.db.session import get_engine
 from app.config import get_database_settings
 
