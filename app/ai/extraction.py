@@ -254,6 +254,10 @@ Sale rules:
   sale.
 - Support one or many sales in the same note. Keep each product as its own sale
   and attach a buyer only to the sale the trader associated with that buyer.
+- Spoken quantities, including words representing numbers (such as "ninety one" or "91"),
+  must be extracted as integer digits into the quantity field (e.g., quantity: 91).
+  Never include spoken sold quantities in item_name.
+- Keep item_name clean and standard (e.g., "biscuits" or "Dano milk").
 - Never accept or round fractional quantities such as 4.5.
 - For quantity 1, total_price equals unit_price.
 - For quantity above 1, calculate total_price when quantity and unit_price are
