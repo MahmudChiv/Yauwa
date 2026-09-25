@@ -4,7 +4,6 @@ from contextlib import asynccontextmanager, suppress
 import logging
 
 from fastapi import FastAPI
-import ngrok
 
 from app.ai.tts import cleanup_expired_media
 from app.routes.routes import router
@@ -44,13 +43,3 @@ def read_root():
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
-
-
-def connect_ngrok():
-    forwarder = ngrok.forward(
-        "localhost:8000",
-        authtoken_from_env=True,
-        domain="rephrase-jittery-juvenile.ngrok-free.dev",
-    )
-    print(f"Available at: {forwarder.url()}")
-    
