@@ -38,6 +38,7 @@ jobs:
           python -m unittest
           app.routes.test_webhook
           app.ai.test_extraction
+          app.ai.test_market
           app.ai.test_generation
           app.ai.test_onboarding
           app.ai.test_tts
