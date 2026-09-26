@@ -10,7 +10,7 @@ from mutagen.mp3 import MP3
 from app.ai.onboarding import _send_twilio_message, _validate_public_media_origin
 from app.ai.tts import register_media, synthesize_speech
 from app.config import Settings
-from app.services.market import MarketItem, get_market_items
+from app.services.market import MarketItem, get_market_items, save_sent_market_list
 
 logger = logging.getLogger(__name__)
 MAX_AUDIO_SECONDS = 10.0
@@ -83,6 +83,7 @@ async def send_market_list(phone: str, trader_id: int | None, settings: Settings
         if trader_id is None:
             raise ValueError('Trader unavailable')
         items = await asyncio.to_thread(get_market_items, trader_id)
+        save_sent_market_list(trader_id, items)
     except asyncio.CancelledError:
         raise
     except Exception:

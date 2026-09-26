@@ -199,6 +199,7 @@ class SalesReplyTestCase(DatabaseFixture, unittest.IsolatedAsyncioTestCase):
 
     async def run_message(self, payload, reply_mock):
         with patch("app.ai.extraction.get_engine", return_value=self.engine), \
+             patch("app.services.market.get_engine", return_value=self.engine), \
              patch("app.ai.extraction.extract_data_from_audio",
                    new=AsyncMock(return_value=payload)), \
              patch("app.ai.extraction.send_onboarding_reply", new=reply_mock):
@@ -281,6 +282,22 @@ class SalesReplyTestCase(DatabaseFixture, unittest.IsolatedAsyncioTestCase):
                 await process_trader_audio(self.phone, "unused.ogg", "audio/ogg",
                                            settings=self.settings)
         save.assert_not_called()
+    async def test_restock_confirmation_flow_updates_stock_and_replies(self):
+        reply = AsyncMock()
+        payload = dict(
+            intent="restock_confirmation",
+            status="ready",
+            transcript="I don buy everything for market list",
+            stock_items=[],
+            sales=[],
+            confirms_market_list=True,
+            reply_text=None,
+        )
+        with patch("app.services.market.save_sent_market_list"):
+            result = await self.run_message(payload, reply)
+
+        self.assertIn("update your stock", reply.await_args.args[1])
+        self.assertEqual(result["reply_text"], reply.await_args.args[1])
     async def test_subsequent_sale_sends_low_stock_and_finished_alerts(self):
         # Sale 1: 8 Cabin biscuits sold -> 2 remaining (low stock alert)
         replies_sent = []
