@@ -9,6 +9,7 @@ from app.ai.extraction import ExtractionResult, _validate_result
 from app.db.ledger import SaleWriteError, record_sales
 from app.db.money import money, sale_total
 from app.models.item import Item
+from app.models.low_stock_item import LowStockItem
 from app.models.sale import Sale
 from app.models.trader import Trader
 
@@ -88,6 +89,30 @@ class LedgerTests(unittest.TestCase):
     def test_kobo_rounding(self):
         self.assertEqual(money(1.005), Decimal("1.01"))
         self.assertEqual(sale_total(1.005, 3), Decimal("3.03"))
+
+    def test_low_stock_alert_triggers_on_subsequent_sales(self):
+        # Stock start: 10, low_stock_threshold: 2
+        # Sale 1: sell 8 units -> remaining 2 units (at threshold). Alert needed.
+        with Session(self.engine) as session:
+            result1 = record_sales(session, self.trader_id, [self.sale(quantity=8, price=100.0, total=800.0)])
+            self.assertTrue(result1["sales"][0]["alert_needed"])
+            self.assertEqual(result1["sales"][0]["remaining_quantity"], 2)
+            low_count = len(session.exec(select(LowStockItem)).all())
+            self.assertEqual(low_count, 1)
+
+        # Sale 2: sell 1 more unit -> remaining 1 unit (below threshold, already in LowStockItem). Alert STILL needed.
+        with Session(self.engine) as session:
+            result2 = record_sales(session, self.trader_id, [self.sale(quantity=1, price=100.0, total=100.0)])
+            self.assertTrue(result2["sales"][0]["alert_needed"])
+            self.assertEqual(result2["sales"][0]["remaining_quantity"], 1)
+            low_count = len(session.exec(select(LowStockItem)).all())
+            self.assertEqual(low_count, 1)
+
+        # Sale 3: sell remaining 1 unit -> remaining 0 units (stock finished completely). Alert STILL needed.
+        with Session(self.engine) as session:
+            result3 = record_sales(session, self.trader_id, [self.sale(quantity=1, price=100.0, total=100.0)])
+            self.assertTrue(result3["sales"][0]["alert_needed"])
+            self.assertEqual(result3["sales"][0]["remaining_quantity"], 0)
 
 
 if __name__ == "__main__":

@@ -118,6 +118,20 @@ class SalesPersistenceTestCase(DatabaseFixture, unittest.TestCase):
         self.assertEqual(result2["unmatched_items"], [])
         self.assertEqual(self.snapshot()[0], 4)
 
+    def test_fuzzy_similarity_match(self):
+        # Add "Dano milk" to trader inventory
+        with Session(self.engine) as session:
+            session.add(Item(trader_id=self.trader_id, item_name="Dano milk",
+                             unit_quantity=20, low_stock_threshold=2))
+            session.commit()
+
+        # "Danomik" (phonetic transcription typo) matches "Dano milk"
+        result = self.write([sale(item_name="Danomik")])
+        self.assertEqual(result["unmatched_items"], [])
+        with Session(self.engine) as session:
+            item = session.exec(select(Item).where(Item.trader_id == self.trader_id, Item.item_name == "Dano milk")).one()
+            self.assertEqual(item.unit_quantity, 17)
+
     def test_unknown_product_is_saved_and_logged_without_stock_change(self):
         with self.assertLogs("app.db.ledger", level="WARNING") as logs:
             result = self.write([sale(item_name="Eggs")])
@@ -284,6 +298,27 @@ class SalesReplyTestCase(DatabaseFixture, unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("update your stock", reply.await_args.args[1])
         self.assertEqual(result["reply_text"], reply.await_args.args[1])
+    async def test_subsequent_sale_sends_low_stock_and_finished_alerts(self):
+        # Sale 1: 8 Cabin biscuits sold -> 2 remaining (low stock alert)
+        replies_sent = []
+        async def mock_reply(phone, text, settings):
+            replies_sent.append(text)
+
+        await self.run_message(extracted(sales=[sale(quantity=8, unit_price=100, total_price=800)]), mock_reply)
+        self.assertEqual(len(replies_sent), 2)  # alert reply + main reply
+        self.assertIn("Only 2 remain", replies_sent[0])
+
+        # Sale 2: 1 Cabin biscuit sold -> 1 remaining (subsequent low stock alert)
+        replies_sent.clear()
+        await self.run_message(extracted(sales=[sale(quantity=1, unit_price=100, total_price=100)]), mock_reply)
+        self.assertEqual(len(replies_sent), 2)
+        self.assertIn("Only 1 remain", replies_sent[0])
+
+        # Sale 3: 1 Cabin biscuit sold -> 0 remaining (finished completely alert)
+        replies_sent.clear()
+        await self.run_message(extracted(sales=[sale(quantity=1, unit_price=100, total_price=100)]), mock_reply)
+        self.assertEqual(len(replies_sent), 2)
+        self.assertIn("don finish completely", replies_sent[0])
 
 
 if __name__ == "__main__":
