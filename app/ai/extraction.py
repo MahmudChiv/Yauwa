@@ -21,6 +21,7 @@ from app.db.session import get_engine
 from app.models.trader import Trader
 from app.services.inventory import save_stock_items
 from app.ai.market import send_market_list
+from app.services.market import process_restock_confirmation
 
 logger = logging.getLogger(__name__)
 UPLOAD_TIMEOUT_SECONDS = 30
@@ -34,14 +35,16 @@ EXTRACTION_RETRY_REPLY = (
 
 
 class StockItem(BaseModel):
-    """One product from the trader's initial stock list."""
+    """One product from the trader's initial stock list or restock confirmation."""
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     item_name: str = Field(min_length=1, max_length=160)
-    unit_quantity: int | None = Field(ge=0)
-    bulk_type: str | None = Field(min_length=1, max_length=40)
-    bulk_quantity: int | None = Field(gt=0)
+    unit_quantity: int | None = Field(default=None, ge=0)
+    bulk_type: str | None = Field(default=None, min_length=1, max_length=40)
+    bulk_quantity: int | None = Field(default=None, gt=0)
+    unit_price: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    action: str | None = Field(default=None, min_length=1, max_length=40)
 
 
 class ExtractedSale(BaseModel):
@@ -61,11 +64,12 @@ class ExtractionResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    intent: Literal["stock_intake", "sale", "market_list", "unknown"]
+    intent: Literal["stock_intake", "sale", "market_list", "restock_confirmation", "unknown"]
     status: Literal["ready", "needs_clarification", "off_topic"]
     transcript: str = Field(min_length=1, max_length=3000)
     stock_items: list[StockItem] = Field(max_length=50)
     sales: list[ExtractedSale] = Field(max_length=50)
+    confirms_market_list: bool = Field(default=False)
     reply_text: str | None = Field(max_length=500)
 
 
@@ -111,8 +115,17 @@ STOCK_RESPONSE_SCHEMA = {
         "unit_quantity": {"type": ["integer", "null"]},
         "bulk_type": {"type": ["string", "null"]},
         "bulk_quantity": {"type": ["integer", "null"]},
+        "unit_price": {"type": ["number", "null"]},
+        "action": {"type": ["string", "null"]},
     },
-    "required": ["item_name", "unit_quantity", "bulk_type", "bulk_quantity"],
+    "required": [
+        "item_name",
+        "unit_quantity",
+        "bulk_type",
+        "bulk_quantity",
+        "unit_price",
+        "action",
+    ],
 }
 SALE_RESPONSE_SCHEMA = {
     "type": "object",
@@ -136,7 +149,13 @@ EXTRACTION_RESPONSE_SCHEMA = {
     "properties": {
         "intent": {
             "type": "string",
-            "enum": ["stock_intake", "sale", "market_list", "unknown"],
+            "enum": [
+                "stock_intake",
+                "sale",
+                "market_list",
+                "restock_confirmation",
+                "unknown",
+            ],
         },
         "status": {
             "type": "string",
@@ -145,6 +164,7 @@ EXTRACTION_RESPONSE_SCHEMA = {
         "transcript": {"type": "string"},
         "stock_items": {"type": "array", "items": STOCK_RESPONSE_SCHEMA},
         "sales": {"type": "array", "items": SALE_RESPONSE_SCHEMA},
+        "confirms_market_list": {"type": "boolean"},
         "reply_text": {"type": ["string", "null"]},
     },
     "required": [
@@ -153,6 +173,7 @@ EXTRACTION_RESPONSE_SCHEMA = {
         "transcript",
         "stock_items",
         "sales",
+        "confirms_market_list",
         "reply_text",
     ],
 }
@@ -186,7 +207,7 @@ PACKAGE_SIZE_RESPONSE_SCHEMA = {
 
 
 PROMPT = """
-You extract initial stock, completed retail sales, and market-list requests
+You extract initial stock, completed retail sales, market-list requests, and market restock confirmations
 from a Nigerian trader's voice note. The trader sells individual units to consumers. Understand English,
 Nigerian Pidgin, Hausa, Yoruba, Igbo, and code-switching.
 
@@ -196,12 +217,13 @@ buyer, package size, or action. Be kind when redirecting abusive, harmful, or
 unrelated speech and never repeat harmful content.
 
 Return exactly these top-level fields:
-- intent: stock_intake, sale, market_list, or unknown
+- intent: stock_intake, sale, market_list, restock_confirmation, or unknown
 - status: ready, needs_clarification, or off_topic
 - transcript: a faithful English transcript; preserve product names, brands,
   numbers, and explicit corrections
 - stock_items: list of stock objects
 - sales: list of sale objects
+- confirms_market_list: boolean (true if trader explicitly confirms buying the sent market list)
 - reply_text: null for ready, otherwise a brief friendly Nigerian Pidgin reply
 
 Intent rules:
@@ -216,16 +238,17 @@ Intent rules:
   "Help me prepare my shopping list". Return stock_items [] and sales [].
   Once this intent is recognized, use ready and reply_text null. Send the
   low-stock information directly; never ask permission to show the list.
+- restock_confirmation means the trader has returned from the market and is confirming
+  their restock purchases or confirming the sent market list (e.g. "I don buy the market list",
+  "I don buy everything wey you list for me", "I bought the market list and added 5 biscuits").
+  Set confirms_market_list to true if they confirm buying the suggested market list.
+  List any adjustments (action: "add", "reduce", "set", "remove") or new items in stock_items.
 - A market visit unrelated to buying shop stock (e.g. visiting a brother),
-  a negated plan, "How market today?", or a completed purchase is NOT market_list.
+  a negated plan, or "How market today?" is NOT market_list or restock_confirmation.
 - An ambiguous market mention uses unknown/needs_clarification with empty lists;
   ask "You want make I list the goods wey you need buy for shop?"
 - unknown means the action is unclear, unrelated, unsupported, a planned sale,
   or a note combines different actions (including market requests with sales).
-  Mixed actions require clarification; never write a sale while listing stock.
-- Completed restock confirmations are outside the market-list task. "I don buy
-  everything" is unknown/needs_clarification; never treat it as market_list or
-  infer quantities. Explicit completed purchases retain existing stock rules.
 - Planned sales are never completed sales.
 - A single note may contain many stock items or many sales. That is valid.
 - When stock intake and sales occur in one note, use unknown with
@@ -233,10 +256,12 @@ Intent rules:
 
 Each stock object contains exactly:
 - item_name: product name with stated brand, variant, and product size
-- unit_quantity: total individual sellable units, or null
+- unit_quantity: total individual sellable units, quantity change, or null
 - bulk_type: singular package name explicitly spoken, such as pack, carton,
   bag, or roll; otherwise null
 - bulk_quantity: whole number of those packages, or null
+- unit_price: stated unit price or cost if mentioned, otherwise null
+- action: "add", "reduce", "set", "remove", or null
 
 Stock rules:
 - Ignore every purchase amount or cost price. It is outside this task.
@@ -781,6 +806,30 @@ async def process_trader_audio(
             phone_number, resolved_trader_id, effective_settings
         )
         return result
+    if result["intent"] == "restock_confirmation":
+        if resolved_trader_id is not None and result["status"] == "ready":
+            items_payload = [
+                item.model_dump() if hasattr(item, "model_dump") else item
+                for item in result["stock_items"]
+            ]
+            try:
+                process_restock_confirmation(
+                    resolved_trader_id,
+                    result.get("confirms_market_list", False),
+                    items_payload,
+                )
+                stock_saved = True
+                result["reply_text"] = (
+                    "Yauwa, I don update your stock with the market restock wey you buy."
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to process restock confirmation for trader %s",
+                    resolved_trader_id,
+                )
+                result["reply_text"] = (
+                    "I no fit update your restock right now. Abeg try send am again."
+                )
     stock_saved = False
     if result["intent"] == "stock_intake":
         items = [StockItem.model_validate(item) for item in result["stock_items"]]
@@ -854,7 +903,7 @@ async def process_trader_audio(
                             )
                         except Exception:
                             logger.exception("Low-stock alert send failed")
-        else:
+        elif result["intent"] == "stock_intake":
             reply = (
                 "Yauwa, I don hear your goods and I don save am."
                 if stock_saved
