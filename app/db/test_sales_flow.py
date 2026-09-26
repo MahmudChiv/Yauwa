@@ -276,7 +276,7 @@ class SalesReplyTestCase(DatabaseFixture, unittest.IsolatedAsyncioTestCase):
         with patch("app.ai.extraction.extract_data_from_audio",
                    new=AsyncMock(side_effect=asyncio.CancelledError)), \
              patch("app.ai.extraction._save_extracted_sales") as save, \
-             patch("app.ai.extraction.send_onboarding_reply", new=AsyncMock()) as reply:
+             patch("app.ai.extraction.send_onboarding_reply", new=AsyncMock()):
             with self.assertRaises(asyncio.CancelledError):
                 await process_trader_audio(self.phone, "unused.ogg", "audio/ogg",
                                            settings=self.settings)
