@@ -1,5 +1,6 @@
 """Record validated sales and decrement a trader's inventory."""
 
+import difflib
 import logging
 import re
 from datetime import datetime, timezone
@@ -144,6 +145,19 @@ def record_sales(
                     if _normalize_item_key(item.item_name) == sale_norm
                 ]
 
+            # 3. Fuzzy similarity match for minor transcription typos (e.g. "Danomik" -> "Dano milk")
+            if not matches and sale_norm:
+                scored = []
+                for item in trader_items:
+                    item_norm = _normalize_item_key(item.item_name)
+                    ratio = difflib.SequenceMatcher(None, sale_norm, item_norm).ratio()
+                    if ratio >= 0.75:
+                        scored.append((ratio, item))
+                if scored:
+                    scored.sort(key=lambda x: x[0], reverse=True)
+                    if len(scored) == 1 or (scored[0][0] - scored[1][0] >= 0.05):
+                        matches = [scored[0][1]]
+
             if len(matches) > 1:
                 raise SaleWriteError(
                     f"More than one item matches {sale.item_name}."
@@ -173,7 +187,7 @@ def record_sales(
                     ).first()
                     if already_low is None:
                         session.add(LowStockItem(item_id=item.id, trader_id=trader_id))
-                        alert_needed = True
+                    alert_needed = True
                 session.add(item)
             else:
                 unmatched_items.append(sale.item_name)

@@ -11,7 +11,7 @@ from typing import Literal
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.ai.onboarding import get_trader_by_phone, send_onboarding_reply
 from app.config import Settings, get_settings
@@ -515,9 +515,17 @@ async def extract_data_from_audio(
     *,
     settings: Settings | None = None,
     model: str | None = None,
+    known_items: list[str] | None = None,
 ) -> dict:
     """Return validated stock or sales data without writing to the database."""
     effective_settings = settings or get_settings()
+    task = "Extract this voice note according to the system policy."
+    if known_items:
+        task += (
+            " The trader currently has these registered inventory items: "
+            + json.dumps(known_items, ensure_ascii=True)
+            + ". When extracting sales, prefer matching spoken products to these exact inventory names."
+        )
     response_text = await _generate_audio_json(
         file_path,
         content_type,
@@ -525,7 +533,7 @@ async def extract_data_from_audio(
         model=model or effective_settings.gemini_extraction_model,
         system_instruction=PROMPT,
         response_schema=EXTRACTION_RESPONSE_SCHEMA,
-        task="Extract this voice note according to the system policy.",
+        task=task,
     )
     try:
         result = ExtractionResult.model_validate_json(response_text, strict=True)
@@ -638,6 +646,22 @@ def _save_extracted_sales(phone_number: str, sales: list[dict]) -> dict:
     with Session(get_engine()) as write_session:
         return record_sales(write_session, trader_id, sales)
 
+def _get_trader_item_names(trader_id: int | None) -> list[str]:
+    """Retrieve existing item names in trader inventory to assist AI matching."""
+    if trader_id is None:
+        return []
+    try:
+        from app.models.item import Item
+        with Session(get_engine()) as session:
+            items = session.exec(
+                select(Item.item_name).where(Item.trader_id == trader_id)
+            ).all()
+            return [name for name in items if name]
+    except Exception:
+        logger.exception("Could not retrieve trader item names for trader %s", trader_id)
+        return []
+
+
 def _resolve_trader_id(phone_number: str) -> int | None:
     """Look up the trader ID for this conversation's phone number."""
     try:
@@ -661,6 +685,7 @@ async def process_trader_audio(
     resolved_trader_id = (
         trader_id if trader_id is not None else _resolve_trader_id(phone_number)
     )
+    known_items = _get_trader_item_names(resolved_trader_id)
     pending = _get_pending_stock(phone_number)
     if pending is not None:
         try:
@@ -737,6 +762,7 @@ async def process_trader_audio(
             audio_path,
             content_type,
             settings=effective_settings,
+            known_items=known_items,
         )
     except asyncio.CancelledError:
         raise
