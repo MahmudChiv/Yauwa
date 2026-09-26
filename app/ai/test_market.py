@@ -113,7 +113,9 @@ class MarketAsyncTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_long_audio_retries_shorter_then_uses_text(self):
         self.duration.return_value = 11
-        channel = await send_short_reply('phone', 'full', 'short', self.settings)
+        with self.assertLogs('app.ai.market', level='WARNING') as logs:
+            channel = await send_short_reply('phone', 'full', 'short', self.settings)
+        self.assertIn('Market audio exceeded duration limit', '\n'.join(logs.output))
         self.assertEqual(channel, 'text')
         self.assertEqual(self.tts.await_count, 2)
         self.register.assert_not_awaited()
@@ -127,16 +129,25 @@ class MarketAsyncTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_audio_uses_text(self):
         self.duration.side_effect = ValueError('invalid MP3')
-        self.assertEqual(await send_short_reply('phone', 'full', 'short', self.settings), 'text')
+        with self.assertLogs('app.ai.market', level='WARNING') as logs:
+            channel = await send_short_reply('phone', 'full', 'short', self.settings)
+        self.assertIn('invalid MP3', '\n'.join(logs.output))
+        self.assertEqual(channel, 'text')
         self.register.assert_not_awaited()
 
     async def test_provider_failures_and_uncertain_submission(self):
         self.tts.side_effect = RuntimeError('tts down')
-        self.assertEqual(await send_short_reply('phone', 'full', 'short', self.settings), 'text')
+        with self.assertLogs('app.ai.market', level='WARNING') as logs:
+            channel = await send_short_reply('phone', 'full', 'short', self.settings)
+        self.assertIn('tts down', '\n'.join(logs.output))
+        self.assertEqual(channel, 'text')
         self.send.reset_mock()
         self.tts.side_effect = None
         self.send.side_effect = TimeoutError('unknown acceptance')
-        self.assertEqual(await send_short_reply('phone', 'full', 'short', self.settings), 'failed')
+        with self.assertLogs('app.ai.market', level='ERROR') as logs:
+            channel = await send_short_reply('phone', 'full', 'short', self.settings)
+        self.assertIn('unknown acceptance', '\n'.join(logs.output))
+        self.assertEqual(channel, 'failed')
         self.send.assert_called_once()  # no duplicate text after uncertain audio submission
 
     async def test_one_send_per_item_in_order_and_delay(self):
@@ -154,9 +165,15 @@ class MarketAsyncTests(unittest.IsolatedAsyncioTestCase):
         with patch('app.ai.market.get_market_items', return_value=[]) as query:
             self.assertEqual((await send_market_list('phone', 1, self.settings))['status'], 'empty')
             query.side_effect = RuntimeError('db down')
-            self.assertEqual((await send_market_list('phone', 1, self.settings))['status'], 'unavailable')
+            with self.assertLogs('app.ai.market', level='ERROR') as logs:
+                summary = await send_market_list('phone', 1, self.settings)
+            self.assertIn('db down', '\n'.join(logs.output))
+            self.assertEqual(summary['status'], 'unavailable')
             query.reset_mock()
-            self.assertEqual((await send_market_list('phone', None, self.settings))['status'], 'unavailable')
+            with self.assertLogs('app.ai.market', level='ERROR') as logs:
+                summary = await send_market_list('phone', None, self.settings)
+            self.assertIn('Trader unavailable', '\n'.join(logs.output))
+            self.assertEqual(summary['status'], 'unavailable')
             query.assert_not_called()
 
     async def test_cancellation_propagates(self):
