@@ -24,9 +24,10 @@ class Settings(BaseSettings):
     twilio_webhook_url: HttpUrl
     public_base_url: HttpUrl
     gemini_api_key: SecretStr
-    gemini_model: str
-    gemini_transcription_model: str = "gemini-3.5-transcribe"
-    gemini_extraction_model: str = "gemini-3.5-flash-lite"
+    groq_api_key: SecretStr
+    groq_model: str = "openai/gpt-oss-120b"
+    gemini_transcription_model: str
+    groq_extraction_model: str = "openai/gpt-oss-20b"
     elevenlabs_api_key: SecretStr
     elevenlabs_voice_id: str
     elevenlabs_model_id: str = "eleven_v3"

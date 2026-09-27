@@ -8,7 +8,7 @@ the task owner when a product or data decision is missing.
 Yauwa is a WhatsApp voice bookkeeping bot for Nigerian retail traders with
 limited literacy. Traders speak about shop stock and individual-unit sales;
 spoken Nigerian Pidgin replies are essential. Gemini handles audio
-transcription/extraction, ElevenLabs makes speech, Twilio carries WhatsApp,
+transcription; Groq handles extraction and generated replies. ElevenLabs makes speech, Twilio carries WhatsApp,
 and PostgreSQL stores ledger data. Read the current code before changing it:
 parts of README.md still describe the original scaffold.
 
@@ -44,7 +44,7 @@ parts of README.md still describe the original scaffold.
    before editing and preserve changes you did not make.
 3. Implement the smallest complete behavior. Add or update automated tests
    in the same PR. A function that only runs with live keys, without tests, is
-   not a finished handoff. Mock Gemini, ElevenLabs, Twilio, and HTTP calls in
+   not a finished handoff. Mock Gemini, Groq, ElevenLabs, Twilio, and HTTP calls in
    unit tests; CI must not need secrets or spend provider credits.
 4. Test success and failure paths that fit your feature: ambiguous extraction,
    multiple items or sales, missing data, repeated messages, provider timeouts,
@@ -86,7 +86,9 @@ PostgreSQL without explicit authorization.
 | `TWILIO_WEBHOOK_URL` | Exact HTTPS ngrok URL ending in `/api/v1/webhook`; it must match Twilio's "When a message comes in" URL. |
 | `PUBLIC_BASE_URL` | Same public HTTPS ngrok origin, without the webhook path; Twilio fetches reply MP3s here. |
 | `GEMINI_API_KEY` | A development-project key from [Google AI Studio](https://ai.google.dev/gemini-api/docs/api-key). |
-| `GEMINI_MODEL`, `GEMINI_TRANSCRIPTION_MODEL`, `GEMINI_EXTRACTION_MODEL` | Account-accessible models agreed with the task owner. Check `app/config.py` for defaults and call sites; do not guess model availability. |
+| `GEMINI_TRANSCRIPTION_MODEL` | Existing Gemini transcription model; preserve its configured value. |
+| `GROQ_API_KEY` | A development key from the Groq console. |
+| `GROQ_MODEL`, `GROQ_EXTRACTION_MODEL` | Defaults: `openai/gpt-oss-120b` for replies and `openai/gpt-oss-20b` for native JSON Schema extraction. |
 | `ELEVENLABS_API_KEY` | Your [ElevenLabs API key](https://elevenlabs.io/docs/api-reference/authentication). |
 | `ELEVENLABS_VOICE_ID`, `ELEVENLABS_MODEL_ID` | A voice available to your API plan and a compatible model. Preview Nigerian-accent/Pidgin speech and test via API; playground access alone does not prove API access. See [voice documentation](https://elevenlabs.io/docs/overview/capabilities/voices). |
 

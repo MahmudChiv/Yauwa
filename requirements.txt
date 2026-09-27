@@ -9,3 +9,5 @@ twilio==9.11.1
 ruff==0.16.8
 alembic==1.19.1
 mutagen==1.47.0
+groq==1.7.0
+ngrok==1.7.0

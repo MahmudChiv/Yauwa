@@ -240,7 +240,7 @@ async def onboard_trader(
         try:
             result = await extract_stated_name(audio_path, content_type, settings)
         except Exception:
-            logger.warning("Gemini name extraction failed", exc_info=True)
+            logger.warning("Name transcription or Groq extraction failed", exc_info=True)
             purpose = "retry_name"
         else:
             if result.status is NameStatus.FOUND and result.name:
