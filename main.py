@@ -5,8 +5,6 @@ import logging
 
 # pyrefly: ignore [missing-import]
 from fastapi import FastAPI
-# pyrefly: ignore [missing-import]
-import ngrok
 
 
 from app.ai.tts import cleanup_expired_media
@@ -47,11 +45,3 @@ def read_root():
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
-
-def connect_ngrok():
-    forwarder = ngrok.forward(
-        "localhost:8000",
-        authtoken_from_env=True,
-        domain="rephrase-jittery-juvenile.ngrok-free.dev",
-    )
-    print(f"Available at: {forwarder.url()}")
