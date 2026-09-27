@@ -13,21 +13,22 @@ week. Their TODO files are intentional.
 ## Planned architecture
 
 FastAPI will receive WhatsApp voice notes through Twilio webhooks. Gemini will
-transcribe the audio and extract the trader's intent and bookkeeping details.
-SQLModel will persist the ledger in PostgreSQL. Gemini will generate a
+transcribe the audio; Groq will extract the trader's intent and bookkeeping details.
+SQLModel will persist the ledger in PostgreSQL. Groq will generate a
 Pidgin-only response, ElevenLabs will turn that response into speech, and Twilio
 will deliver the audio to the trader. ElevenLabs handles TTS only; this pipeline
 is a design overview, not implemented behavior.
 
-Voice note → Twilio webhook → Gemini transcription/extraction → Postgres ledger
-update → Gemini reply generation, Pidgin only → ElevenLabs TTS → sent back via Twilio
+Voice note → Twilio webhook → Gemini transcription → Groq extraction → Postgres ledger
+update → Groq reply generation, Pidgin only → ElevenLabs TTS → sent back via Twilio
 
 ## Tech stack and layout
 
 - Python 3.12 and FastAPI: HTTP application.
 - PostgreSQL, SQLModel, and psycopg2-binary: synchronous database access.
 - pydantic-settings: centralized environment configuration.
-- Gemini (`google-genai`): transcription, extraction, and reply generation.
+- Gemini (`google-genai`): transcription.
+- Groq (`groq`): structured extraction and reply generation.
 - ElevenLabs: TTS only; Twilio: WhatsApp transport. HTTPX is available for HTTP calls.
 - Ruff and GitHub Actions: lint and startup checks; Railway: deployment.
 
@@ -109,16 +110,22 @@ coding agent to read [GUIDE.md](GUIDE.md) before every task.
    | `TWILIO_WEBHOOK_URL` | Exact public HTTPS URL Twilio calls, ending in `/api/v1/webhook` |
    | `PUBLIC_BASE_URL` | Public HTTPS origin where Twilio can fetch generated reply audio |
    | `GEMINI_API_KEY` | Your Google AI Studio API key |
-   | `GEMINI_MODEL` | Gemini model for structured text decisions and Pidgin replies |
+   | `GROQ_API_KEY` | Your Groq API key |
+   | `GROQ_MODEL` | Pidgin replies; defaults to `openai/gpt-oss-120b` |
    | `GEMINI_TRANSCRIPTION_MODEL` | Dedicated audio transcription model; defaults to `gemini-3.5-transcribe` |
-   | `GEMINI_EXTRACTION_MODEL` | Gemini audio extraction model; defaults to `gemini-3.5-flash-lite` |
+   | `GROQ_EXTRACTION_MODEL` | Native JSON Schema extraction; defaults to `openai/gpt-oss-20b` |
    | `ELEVENLABS_API_KEY` | Your ElevenLabs API key |
    | `ELEVENLABS_VOICE_ID` | The voice ID selected for your development account |
    | `ELEVENLABS_MODEL_ID` | Optional TTS model override; defaults to `eleven_v3` |
 
    Provider setup: [Gemini](https://ai.google.dev/gemini-api/docs/get-started),
+   [Groq](https://console.groq.com/docs/quickstart),
    [Twilio WhatsApp Sandbox](https://www.twilio.com/docs/whatsapp/sandbox),
    [ElevenLabs](https://elevenlabs.io/docs/overview/quickstart).
+
+   Groq extraction uses strict native JSON Schema output. Existing fixed reply
+   templates remain unchanged; the onboarding reply generator uses Groq when called.
+   No extraction or reply request falls back to Gemini.
 
    For database tasks, install PostgreSQL locally or provision a development
    PostgreSQL database and create a database/user. A local URL has this shape:
@@ -145,7 +152,7 @@ coding agent to read [GUIDE.md](GUIDE.md) before every task.
    Stop the server with Ctrl+C.
 
 The health endpoint needs no credentials or running database. Settings validate
-only when `get_settings()` is called; at that point its seven values are required,
+only when `get_settings()` is called; at that point required values are validated,
 and `XXXXXX` is not a valid database URL. Placeholder provider keys cannot make
 real API calls. Settings read the repository-root `.env`; process environment
 variables take precedence. Restart after changing configuration because settings

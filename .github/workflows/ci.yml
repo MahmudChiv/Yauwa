@@ -40,6 +40,7 @@ jobs:
           app.ai.test_extraction
           app.ai.test_market
           app.ai.test_generation
+          app.ai.test_groq_client
           app.ai.test_onboarding
           app.ai.test_tts
           app.models.test_inventory_models

@@ -3,10 +3,12 @@
 import json
 import tempfile
 import unittest
+
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
+from app.ai.groq_client import strict_schema
 from pydantic import ValidationError
 
 from app.ai.extraction import (
@@ -199,19 +201,36 @@ class ExtractionValidationTestCase(unittest.TestCase):
         self.assertNotIn("make your voice clear", EXTRACTION_RETRY_REPLY)
 
 
-class GeminiExtractionTestCase(unittest.IsolatedAsyncioTestCase):
+def _completion(text, finish_reason="stop", refusal=None):
+    return SimpleNamespace(choices=[SimpleNamespace(
+        finish_reason=finish_reason,
+        message=SimpleNamespace(content=text, refusal=refusal),
+    )])
+
+
+class GroqExtractionTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.enterContext(patch("app.ai.extraction._resolve_trader_id", return_value=None))
         _pending_stock.clear()
         self.settings = Mock()
         self.settings.gemini_api_key.get_secret_value.return_value = "secret"
-        self.settings.gemini_extraction_model = "gemini-test"
+        self.settings.groq_extraction_model = "groq-test"
+        self.settings.gemini_transcription_model = "transcription-test"
+        self.settings.groq_api_key.get_secret_value.return_value = "groq-secret"
         self.client = Mock()
         self.client.aio.files.upload = AsyncMock(
-            return_value=SimpleNamespace(name="files/voice")
+            return_value=SimpleNamespace(name="files/voice", uri="https://example.test/audio", mime_type="audio/ogg")
         )
         self.client.aio.files.delete = AsyncMock()
         self.client.aio.models.generate_content = AsyncMock()
+        self.client.aio.interactions.create = AsyncMock(
+            return_value=SimpleNamespace(output_text="Three packs of biscuits, fifty each")
+        )
+        self.groq = Mock()
+        self.groq.chat.completions.create = AsyncMock()
+        self.groq.__aenter__ = AsyncMock(return_value=self.groq)
+        self.groq.__aexit__ = AsyncMock(return_value=False)
+        self.enterContext(patch("app.ai.groq_client.AsyncGroq", return_value=self.groq))
         self.client.aio.aclose = AsyncMock()
 
     def tearDown(self) -> None:
@@ -219,7 +238,7 @@ class GeminiExtractionTestCase(unittest.IsolatedAsyncioTestCase):
 
     async def test_uses_configured_model_and_cleans_upload(self) -> None:
         payload = _result().model_dump(mode="json")
-        self.client.aio.models.generate_content.return_value = SimpleNamespace(
+        self.groq.chat.completions.create.return_value = _completion(
             text=json.dumps(payload)
         )
 
@@ -234,21 +253,30 @@ class GeminiExtractionTestCase(unittest.IsolatedAsyncioTestCase):
                     path,
                     "audio/ogg",
                     settings=self.settings,
+                    preferred_language="pidgin",
                 )
 
-        call = self.client.aio.models.generate_content.await_args.kwargs
-        self.assertEqual(call["model"], "gemini-test")
-        self.assertEqual(call["config"].system_instruction, PROMPT)
+        call = self.groq.chat.completions.create.await_args.kwargs
+        self.assertEqual(call["model"], "groq-test")
+        self.assertEqual(call["messages"][0]["content"], PROMPT)
         self.assertEqual(
-            call["config"].response_json_schema,
-            EXTRACTION_RESPONSE_SCHEMA,
+            call["response_format"]["json_schema"]["schema"],
+            strict_schema(EXTRACTION_RESPONSE_SCHEMA),
         )
+        self.assertTrue(call["response_format"]["json_schema"]["strict"])
+        self.assertEqual(call["response_format"]["type"], "json_schema")
+        self.assertIn("<transcript>Three packs", call["messages"][1]["content"])
+        self.assertIn("stored preferred language is \"pidgin\"", call["messages"][1]["content"])
+        self.assertIn("'don' transcribed as English 'don't'", call["messages"][1]["content"])
+        self.client.aio.models.generate_content.assert_not_awaited()
+        self.groq.chat.completions.create.assert_awaited_once()
+        self.groq.__aexit__.assert_awaited_once()
         self.assertEqual(result["stock_items"][0]["unit_quantity"], 150)
         self.client.aio.files.delete.assert_awaited_once_with(name="files/voice")
         self.client.aio.aclose.assert_awaited_once()
 
     async def test_provider_failure_still_cleans_upload(self) -> None:
-        self.client.aio.models.generate_content.side_effect = RuntimeError("down")
+        self.groq.chat.completions.create.side_effect = RuntimeError("down")
 
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "voice.ogg"
@@ -317,7 +345,7 @@ class GeminiExtractionTestCase(unittest.IsolatedAsyncioTestCase):
         send_reply.assert_awaited_once()
 
     async def test_package_size_request_uses_pending_indices(self) -> None:
-        self.client.aio.models.generate_content.return_value = SimpleNamespace(
+        self.groq.chat.completions.create.return_value = _completion(
             text=json.dumps(
                 {
                     "status": "answer",
@@ -346,8 +374,8 @@ class GeminiExtractionTestCase(unittest.IsolatedAsyncioTestCase):
                     settings=self.settings,
                 )
 
-        call = self.client.aio.models.generate_content.await_args.kwargs
-        self.assertIn('"item_index": 0', call["contents"][1])
+        call = self.groq.chat.completions.create.await_args.kwargs
+        self.assertIn('"item_index": 0', call["messages"][1]["content"])
         self.assertEqual(answer.sizes[0].units_per_bulk, 50)
         self.client.aio.files.delete.assert_awaited_once_with(name="files/voice")
 
@@ -482,7 +510,7 @@ class GeminiExtractionTestCase(unittest.IsolatedAsyncioTestCase):
     async def test_unmatched_package_index_does_not_change_pending_stock(
         self,
     ) -> None:
-        self.client.aio.models.generate_content.return_value = SimpleNamespace(
+        self.groq.chat.completions.create.return_value = _completion(
             text=json.dumps(
                 {
                     "status": "answer",
@@ -515,6 +543,85 @@ class GeminiExtractionTestCase(unittest.IsolatedAsyncioTestCase):
                     )
 
         self.client.aio.files.delete.assert_awaited_once()
+
+    async def test_bad_groq_responses_fail_and_clean_up_without_fallback(self):
+        invalid = _result().model_dump(mode="json")
+        invalid["stock_items"][0]["unit_quantity"] = -1
+        cases = [
+            _completion(""), _completion("   "), _completion("{}", "length"),
+            _completion("{}", refusal="No"), SimpleNamespace(choices=[]),
+            _completion("not json"), _completion("{}"),
+            _completion(json.dumps(invalid)),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "voice.ogg"
+            path.write_bytes(b"voice")
+            for response in cases:
+                with self.subTest(response=response):
+                    self.groq.chat.completions.create.reset_mock()
+                    self.groq.__aexit__.reset_mock()
+                    self.client.aio.files.delete.reset_mock()
+                    self.client.aio.aclose.reset_mock()
+                    self.groq.chat.completions.create.return_value = response
+                    with patch("app.ai.extraction._gemini_client", return_value=self.client):
+                        with self.assertRaises(AudioExtractionError):
+                            await extract_data_from_audio(path, "audio/ogg", settings=self.settings)
+                    self.groq.chat.completions.create.assert_awaited_once()
+                    self.groq.__aexit__.assert_awaited_once()
+                    self.client.aio.models.generate_content.assert_not_awaited()
+                    self.client.aio.files.delete.assert_awaited_once()
+                    self.client.aio.aclose.assert_awaited_once()
+
+    async def test_groq_deadline_cleans_up_without_retry(self):
+        import asyncio
+
+        async def slow_completion(**kwargs):
+            await asyncio.sleep(1)
+
+        self.groq.chat.completions.create.side_effect = slow_completion
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "voice.ogg"
+            path.write_bytes(b"voice")
+            with (
+                patch("app.ai.extraction._gemini_client", return_value=self.client),
+                patch("app.ai.extraction.EXTRACTION_TIMEOUT_SECONDS", 0.01),
+            ):
+                with self.assertRaises(AudioExtractionError):
+                    await extract_data_from_audio(path, "audio/ogg", settings=self.settings)
+        self.groq.chat.completions.create.assert_awaited_once()
+        self.groq.__aexit__.assert_awaited_once()
+        self.client.aio.files.delete.assert_awaited_once()
+        self.client.aio.aclose.assert_awaited_once()
+
+    async def test_transcription_failure_never_calls_groq(self):
+        self.client.aio.interactions.create.side_effect = ValueError("transcription failed")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "voice.ogg"
+            path.write_bytes(b"voice")
+            with patch("app.ai.extraction._gemini_client", return_value=self.client):
+                with self.assertRaises(AudioExtractionError):
+                    await extract_data_from_audio(path, "audio/ogg", settings=self.settings)
+        self.groq.chat.completions.create.assert_not_awaited()
+        self.client.aio.files.delete.assert_awaited_once()
+        self.client.aio.aclose.assert_awaited_once()
+
+    async def test_model_override_and_inventory_context_reach_groq(self):
+        self.groq.chat.completions.create.return_value = _completion(
+            _result(intent="sale", stock_items=[], sales=[_sale()]).model_dump_json()
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "voice.ogg"
+            path.write_bytes(b"voice")
+            with patch("app.ai.extraction._gemini_client", return_value=self.client):
+                result = await extract_data_from_audio(
+                    path, "audio/ogg", settings=self.settings,
+                    model="override-test", known_items=["Cabin biscuit"],
+                )
+        call = self.groq.chat.completions.create.await_args.kwargs
+        self.assertEqual(call["model"], "override-test")
+        self.assertIn('["Cabin biscuit"]', call["messages"][1]["content"])
+        self.assertIsNone(result["sales"][0]["buyer_name"])
+        self.assertEqual(result["sales"][0]["total_price"], 200)
 
     def test_expired_stock_is_not_used_for_later_audio(self) -> None:
         phone = "+2348012345678"

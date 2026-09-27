@@ -248,9 +248,13 @@ class SalesReplyTestCase(DatabaseFixture, unittest.IsolatedAsyncioTestCase):
         reply = AsyncMock()
         payload = extracted(intent="stock_intake", sales=[], stock_items=[dict(
             item_name="Eggs", unit_quantity=30, bulk_type=None, bulk_quantity=None)])
-        with patch("app.ai.extraction._save_extracted_sales") as save:
+        with (
+            patch("app.ai.extraction._save_extracted_sales") as save,
+            patch("app.ai.extraction.save_stock_items", return_value=1) as save_stock,
+        ):
             await self.run_message(payload, reply)
         save.assert_not_called()
+        save_stock.assert_called_once()
         self.assertEqual(self.snapshot(), (10, []))
 
     async def test_extraction_failure_sends_retry_without_database_write(self):

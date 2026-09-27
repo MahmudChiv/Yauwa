@@ -312,7 +312,10 @@ async def _process_incoming_message(
     started_at = time.perf_counter()
     phone_number = normalize_phone_number(payload.sender)
     lock = _phone_locks.setdefault(phone_number, asyncio.Lock())
+    if lock.locked():
+        logger.info("Incoming trader message is waiting for earlier work")
     async with lock:
+        logger.info("Incoming trader message background processing started")
         try:
             with Session(get_engine()) as session:
                 is_onboarded = onboarding_complete(session, phone_number)
@@ -416,5 +419,8 @@ async def receive_twilio_webhook(
         ) from exc
 
     if await _claim_message(payload.message_sid):
+        logger.info("Accepted Twilio message for background processing")
         background_tasks.add_task(_process_incoming_message, payload, settings)
+    else:
+        logger.info("Suppressed duplicate Twilio webhook delivery")
     return Response(content="<Response></Response>", media_type="application/xml")
