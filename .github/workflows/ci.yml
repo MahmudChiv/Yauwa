@@ -36,6 +36,7 @@ jobs:
       - name: Run application and sales regression tests
         run: >-
           python -m unittest
+          app.test_demo
           app.routes.test_webhook
           app.ai.test_extraction
           app.ai.test_market
