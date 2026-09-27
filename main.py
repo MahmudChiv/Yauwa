@@ -8,6 +8,7 @@ from fastapi import FastAPI
 
 
 from app.ai.tts import cleanup_expired_media
+from app.demo import initialize_demo, router as demo_router
 from app.routes.routes import router
 from app.routes.webhook import router as webhook_router
 
@@ -23,6 +24,7 @@ async def _media_cleanup_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    initialize_demo()
     cleanup_task = asyncio.create_task(_media_cleanup_loop())
     try:
         yield
@@ -35,6 +37,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.include_router(router)
 app.include_router(webhook_router)
+app.include_router(demo_router)
 
 
 @app.get("/")
