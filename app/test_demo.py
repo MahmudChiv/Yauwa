@@ -73,13 +73,13 @@ class DemoTests(unittest.IsolatedAsyncioTestCase):
                 patch("app.routes.webhook._download_audio", new_callable=AsyncMock) as download, \
                 patch("app.routes.webhook.get_engine") as database, \
                 patch("app.routes.webhook.get_settings") as providers:
-            for i in range(7):
+            for i in range(6):
                 self.assertEqual((await self.post(f"SM{i}")).status_code, 200)
                 self.assertEqual((await self.post(f"SM{i}")).status_code, 200)
             self.assertEqual((await self.post("SM-completed")).status_code, 200)
             self.assertEqual([c.kwargs["media_url"].rsplit("/", 1)[-1] for c in send.call_args_list], self.files)
-            self.assertEqual(send.call_count, 15)
-            self.assertEqual(sleep.await_count, 8)
+            self.assertEqual(send.call_count, 12)
+            self.assertEqual(sleep.await_count, 6)
             self.assertTrue(all(c.args == (1.0,) for c in sleep.call_args_list))
             process.assert_not_called()
             download.assert_not_called()
@@ -164,7 +164,7 @@ class DemoTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNotNone(player.configuration_error)
         (self.directory / "script.json").write_text(json.dumps(list(reversed(self.script))))
         player = DemoPlayer(self.settings, self.directory)
-        self.assertEqual(player.steps[0], ["06_restock_confirmed.mp3"])
+        self.assertEqual(player.steps[0], ["05_restock_confirmed.mp3"])
         self.assertEqual(player.index, 0)
 
     async def test_disabled_demo_needs_no_files_or_credentials(self):

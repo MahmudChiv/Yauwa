@@ -242,4 +242,4 @@ and has not been activated by this scaffold.
 
 ## Hackathon demo
 
-The optional prerecorded Musa walkthrough is documented in [demo/README.md](demo/README.md), with all 15 recording texts in [demo/SCRIPT.md](demo/SCRIPT.md). Enable it with `DEMO_MODE=true` and `DEMO_PHONE_NUMBER=+2348164247735`; all other numbers keep using the real pipeline. Disable it with `DEMO_MODE=false` and restart.
+The optional prerecorded Musa walkthrough is documented in [demo/README.md](demo/README.md), with all 12 recording texts in [demo/SCRIPT.md](demo/SCRIPT.md). Enable it with `DEMO_MODE=true` and `DEMO_PHONE_NUMBER=+2348164247735`; all other numbers keep using the real pipeline. Disable it with `DEMO_MODE=false` and restart.
