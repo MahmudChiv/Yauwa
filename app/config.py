@@ -92,21 +92,3 @@ class DatabaseSettings(BaseSettings):
 def get_database_settings() -> DatabaseSettings:
     """Read only DATABASE_URL, so tooling never needs provider credentials."""
     return DatabaseSettings()
-
-
-class DemoSettings(BaseSettings):
-    """Demo routing and delivery only; no database or AI credentials required."""
-
-    model_config = SettingsConfigDict(
-        env_file=Path(__file__).resolve().parent.parent / ".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
-
-    demo_mode: bool = False
-    demo_phone_number: str = ""
-    twilio_account_sid: str = ""
-    twilio_auth_token: SecretStr = SecretStr("")
-    twilio_whatsapp_number: str = ""
-    twilio_webhook_url: str = ""
-    public_base_url: str = ""

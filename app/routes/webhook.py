@@ -27,7 +27,6 @@ from app.ai.extraction import process_trader_audio
 from app.ai.tts import get_media
 from app.config import Settings, TwilioSettings, get_settings, get_twilio_settings
 from app.db.session import get_engine
-from app.demo import get_demo_player
 from app.schemas.webhook import TwilioWebhookPayload
 from sqlmodel import Session
 
@@ -418,15 +417,6 @@ async def receive_twilio_webhook(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=exc.errors(include_url=False),
         ) from exc
-
-    demo = get_demo_player()
-    if demo.matches(payload.sender):
-        if not demo.status()["ready"]:
-            logging.getLogger(__name__).error("Demo request rejected: %s", demo.status())
-            raise HTTPException(status_code=503, detail="Demo is not ready; check /demo/status.")
-        if await _claim_message(payload.message_sid):
-            background_tasks.add_task(demo.play)
-        return Response(content="<Response></Response>", media_type="application/xml")
 
     if await _claim_message(payload.message_sid):
         logger.info("Accepted Twilio message for background processing")
