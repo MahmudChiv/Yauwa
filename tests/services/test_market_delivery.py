@@ -9,11 +9,12 @@ from unittest.mock import AsyncMock, patch
 
 from sqlmodel import Session, SQLModel, create_engine, select
 
-from app.ai.extraction import (
-    AudioExtractionError, ExtractionResult, PackageSizeAnswer, PendingStock,
-    StockItem, _pending_stock, _validate_result, process_trader_audio,
+from app.schemas.extraction import ExtractionResult, PackageSizeAnswer, StockItem
+from app.services.message_processing import PendingStock, _pending_stock, process_trader_audio
+from app.services.extraction import (
+    AudioExtractionError, _validate_result,
 )
-from app.ai.market import audio_duration, item_replies, send_market_list, send_short_reply
+from app.services.market_delivery import audio_duration, item_replies, send_market_list, send_short_reply
 from app.models.item import Item
 from app.models.low_stock_item import LowStockItem
 from app.models.trader import Trader
@@ -98,13 +99,13 @@ class MarketAsyncTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.folder.cleanup)
         self.path = Path(self.folder.name) / 'test.mp3'
         self.path.write_bytes(b'audio')
-        self.enterContext(patch('app.ai.market._validate_public_media_origin'))
-        self.tts = self.enterContext(patch('app.ai.market.synthesize_speech',
+        self.enterContext(patch('app.services.market_delivery._validate_public_media_origin'))
+        self.tts = self.enterContext(patch('app.services.market_delivery.synthesize_speech',
                                           new=AsyncMock(return_value=self.path)))
-        self.duration = self.enterContext(patch('app.ai.market.audio_duration', return_value=5))
-        self.register = self.enterContext(patch('app.ai.market.register_media',
+        self.duration = self.enterContext(patch('app.services.market_delivery.audio_duration', return_value=5))
+        self.register = self.enterContext(patch('app.services.market_delivery.register_media',
                                                new=AsyncMock(return_value='token')))
-        self.send = self.enterContext(patch('app.ai.market._send_twilio_message', return_value='sid'))
+        self.send = self.enterContext(patch('app.services.market_delivery._send_twilio_message', return_value='sid'))
 
     async def test_valid_audio_is_queued_once(self):
         self.assertEqual(await send_short_reply('phone', 'full', 'short', self.settings), 'audio')
@@ -113,7 +114,7 @@ class MarketAsyncTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_long_audio_retries_shorter_then_uses_text(self):
         self.duration.return_value = 11
-        with self.assertLogs('app.ai.market', level='WARNING') as logs:
+        with self.assertLogs('app.services.market_delivery', level='WARNING') as logs:
             channel = await send_short_reply('phone', 'full', 'short', self.settings)
         self.assertIn('Market audio exceeded duration limit', '\n'.join(logs.output))
         self.assertEqual(channel, 'text')
@@ -129,7 +130,7 @@ class MarketAsyncTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_audio_uses_text(self):
         self.duration.side_effect = ValueError('invalid MP3')
-        with self.assertLogs('app.ai.market', level='WARNING') as logs:
+        with self.assertLogs('app.services.market_delivery', level='WARNING') as logs:
             channel = await send_short_reply('phone', 'full', 'short', self.settings)
         self.assertIn('invalid MP3', '\n'.join(logs.output))
         self.assertEqual(channel, 'text')
@@ -137,14 +138,14 @@ class MarketAsyncTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_provider_failures_and_uncertain_submission(self):
         self.tts.side_effect = RuntimeError('tts down')
-        with self.assertLogs('app.ai.market', level='WARNING') as logs:
+        with self.assertLogs('app.services.market_delivery', level='WARNING') as logs:
             channel = await send_short_reply('phone', 'full', 'short', self.settings)
         self.assertIn('tts down', '\n'.join(logs.output))
         self.assertEqual(channel, 'text')
         self.send.reset_mock()
         self.tts.side_effect = None
         self.send.side_effect = TimeoutError('unknown acceptance')
-        with self.assertLogs('app.ai.market', level='ERROR') as logs:
+        with self.assertLogs('app.services.market_delivery', level='ERROR') as logs:
             channel = await send_short_reply('phone', 'full', 'short', self.settings)
         self.assertIn('unknown acceptance', '\n'.join(logs.output))
         self.assertEqual(channel, 'failed')
@@ -152,9 +153,9 @@ class MarketAsyncTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_one_send_per_item_in_order_and_delay(self):
         items = [MarketItem(1, 'Bread', 2, 28), MarketItem(2, 'Cabin', 1, 9), MarketItem(3, 'Egg', 0, 30)]
-        with patch('app.ai.market.get_market_items', return_value=items), \
-             patch('app.ai.market.send_short_reply', new=AsyncMock(side_effect=['audio', 'failed', 'audio'])) as send, \
-             patch('app.ai.market.asyncio.sleep', new=AsyncMock()) as sleep:
+        with patch('app.services.market_delivery.get_market_items', return_value=items), \
+             patch('app.services.market_delivery.send_short_reply', new=AsyncMock(side_effect=['audio', 'failed', 'audio'])) as send, \
+             patch('app.services.market_delivery.asyncio.sleep', new=AsyncMock()) as sleep:
             summary = await send_market_list('phone', 1, self.settings)
         self.assertEqual(summary['status'], 'partial')
         self.assertEqual([d['item_id'] for d in summary['deliveries']], [1, 2, 3])
@@ -162,15 +163,15 @@ class MarketAsyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sleep.await_count, 2)
 
     async def test_empty_unavailable_and_missing_trader(self):
-        with patch('app.ai.market.get_market_items', return_value=[]) as query:
+        with patch('app.services.market_delivery.get_market_items', return_value=[]) as query:
             self.assertEqual((await send_market_list('phone', 1, self.settings))['status'], 'empty')
             query.side_effect = RuntimeError('db down')
-            with self.assertLogs('app.ai.market', level='ERROR') as logs:
+            with self.assertLogs('app.services.market_delivery', level='ERROR') as logs:
                 summary = await send_market_list('phone', 1, self.settings)
             self.assertIn('db down', '\n'.join(logs.output))
             self.assertEqual(summary['status'], 'unavailable')
             query.reset_mock()
-            with self.assertLogs('app.ai.market', level='ERROR') as logs:
+            with self.assertLogs('app.services.market_delivery', level='ERROR') as logs:
                 summary = await send_market_list('phone', None, self.settings)
             self.assertIn('Trader unavailable', '\n'.join(logs.output))
             self.assertEqual(summary['status'], 'unavailable')
@@ -183,11 +184,11 @@ class MarketAsyncTests(unittest.IsolatedAsyncioTestCase):
         self.send.assert_not_called()
 
     async def test_ready_routing_never_writes_stock_or_sales(self):
-        with patch('app.ai.extraction.extract_data_from_audio', new=AsyncMock(return_value=result().model_dump())), \
-             patch('app.ai.extraction.send_market_list', new=AsyncMock(return_value={'status': 'queued'})) as market, \
-             patch('app.ai.extraction._save_extracted_sales') as sales, \
-             patch('app.ai.extraction.save_stock_items') as stock, \
-             patch('app.ai.extraction.send_onboarding_reply', new=AsyncMock()) as reply:
+        with patch('app.services.message_processing.extract_data_from_audio', new=AsyncMock(return_value=result().model_dump())), \
+             patch('app.services.message_processing.send_market_list', new=AsyncMock(return_value={'status': 'queued'})) as market, \
+             patch('app.services.message_processing._save_extracted_sales') as sales, \
+             patch('app.services.message_processing.save_stock_items') as stock, \
+             patch('app.services.message_processing.send_onboarding_reply', new=AsyncMock()) as reply:
             response = await process_trader_audio('phone', 'audio.ogg', 'audio/ogg', self.settings, trader_id=1)
         market.assert_awaited_once_with('phone', 1, self.settings)
         sales.assert_not_called()
@@ -197,9 +198,9 @@ class MarketAsyncTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_recognized_market_request_skips_confirmation(self):
         payload = _validate_result(result(status='needs_clarification')).model_dump()
-        with patch('app.ai.extraction.extract_data_from_audio', new=AsyncMock(return_value=payload)), \
-             patch('app.ai.extraction.send_market_list', new=AsyncMock()) as market, \
-             patch('app.ai.extraction.send_onboarding_reply', new=AsyncMock()) as reply:
+        with patch('app.services.message_processing.extract_data_from_audio', new=AsyncMock(return_value=payload)), \
+             patch('app.services.message_processing.send_market_list', new=AsyncMock()) as market, \
+             patch('app.services.message_processing.send_onboarding_reply', new=AsyncMock()) as reply:
             await process_trader_audio('phone', 'audio.ogg', 'audio/ogg', self.settings, trader_id=1)
         market.assert_awaited_once()
         reply.assert_not_awaited()
@@ -210,9 +211,9 @@ class MarketAsyncTests(unittest.IsolatedAsyncioTestCase):
                                                          bulk_type='pack', bulk_quantity=2)], time.monotonic())
         self.addCleanup(_pending_stock.clear)
         answer = PackageSizeAnswer(status='new_message', transcript='Which goods should I buy?', sizes=[])
-        with patch('app.ai.extraction.extract_package_sizes_from_audio', new=AsyncMock(return_value=answer)), \
-             patch('app.ai.extraction.extract_data_from_audio', new=AsyncMock(return_value=result().model_dump())), \
-             patch('app.ai.extraction.send_market_list', new=AsyncMock()) as market:
+        with patch('app.services.message_processing.extract_package_sizes_from_audio', new=AsyncMock(return_value=answer)), \
+             patch('app.services.message_processing.extract_data_from_audio', new=AsyncMock(return_value=result().model_dump())), \
+             patch('app.services.message_processing.send_market_list', new=AsyncMock()) as market:
             await process_trader_audio('phone', 'audio.ogg', 'audio/ogg', self.settings, trader_id=1)
         market.assert_awaited_once()
         self.assertNotIn('phone', _pending_stock)

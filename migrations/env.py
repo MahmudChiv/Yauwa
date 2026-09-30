@@ -18,7 +18,7 @@ from sqlmodel import SQLModel
 # autogenerate an empty migration.
 from app.models import item, low_stock_item, sale, trader  # noqa: F401
 from app.db.session import get_engine
-from app.config import get_database_settings
+from app.core.config import get_database_settings
 
 # Alembic Config object; provides access to values in alembic.ini.
 config = context.config

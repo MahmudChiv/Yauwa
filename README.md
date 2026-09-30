@@ -5,22 +5,14 @@ who cannot read or write, or have limited literacy. Traders will log sales,
 track stock, and manage restocking by speaking. Replies must be in Nigerian
 Pidgin and delivered as audio: literacy is the core constraint.
 
-**Current status:** the signed Twilio webhook accepts text messages and downloads
-the first audio attachment to a temporary file. Models, AI integrations, and
-ledger business logic are separate tasks for our four-person, six-day build
-week. Their TODO files are intentional.
+**Current status:** the signed Twilio webhook accepts voice notes, routes new
+traders through onboarding, and processes stock, sales, market lists, and
+restock confirmations. Gemini handles transcription, Groq extracts structured
+data and generates replies, ElevenLabs produces audio, and PostgreSQL stores
+ledger data.
 
-## Planned architecture
-
-FastAPI will receive WhatsApp voice notes through Twilio webhooks. Gemini will
-transcribe the audio; Groq will extract the trader's intent and bookkeeping details.
-SQLModel will persist the ledger in PostgreSQL. Groq will generate a
-Pidgin-only response, ElevenLabs will turn that response into speech, and Twilio
-will deliver the audio to the trader. ElevenLabs handles TTS only; this pipeline
-is a design overview, not implemented behavior.
-
-Voice note → Twilio webhook → Gemini transcription → Groq extraction → Postgres ledger
-update → Groq reply generation, Pidgin only → ElevenLabs TTS → sent back via Twilio
+Voice note → Twilio webhook → Gemini transcription → Groq extraction →
+PostgreSQL ledger update → Pidgin reply → ElevenLabs audio → Twilio delivery
 
 ## Tech stack and layout
 
@@ -33,15 +25,18 @@ update → Groq reply generation, Pidgin only → ElevenLabs TTS → sent back v
 - Ruff and GitHub Actions: lint and startup checks; Railway: deployment.
 
 ```text
-main.py                 Existing FastAPI app and /health endpoint
+main.py                     FastAPI app assembly and media cleanup lifespan
 app/
-  routes/routes.py      Existing /api/v1 router
-  routes/webhook.py     Signed /api/v1/webhook receiver and audio downloader
-  models/              Trader, Item, and Sale SQLModel entities
-  schemas/webhook.py   Incoming Twilio payload and response schemas
-  ai/                  Extraction, reply generation, and TTS placeholders
-  config.py            Settings and cached get_settings()
-  db/session.py        Cached get_engine() and yielding get_session()
+  api/                      Webhook, media, and health HTTP routes
+  core/config.py            Validated settings loaded only when needed
+  schemas/                  Incoming webhook and extraction data contracts
+  services/                 Onboarding, message flow, inventory, sales, market
+  providers/                Gemini/Groq, ElevenLabs, and reply integrations
+  db/                       Session setup and ledger persistence
+  models/                   SQLModel entities
+tests/
+  api/  services/  providers/  db/  models/  integration/
+migrations/                 Alembic revisions
 ```
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before your first branch and ask your
@@ -183,7 +178,7 @@ terminal. The example signs every field that it sends:
 export TWILIO_WEBHOOK_URL='https://your-tunnel.example/api/v1/webhook'
 export TEST_SENDER='whatsapp:+2348012345678'
 export TWILIO_SIGNATURE=$(python - <<'PY'
-from app.config import get_twilio_settings
+from app.core.config import get_twilio_settings
 from twilio.request_validator import RequestValidator
 
 settings = get_twilio_settings()
@@ -197,18 +192,17 @@ curl -X POST "${TWILIO_WEBHOOK_URL}" \
   --data-urlencode "From=${TEST_SENDER}"
 ```
 
-A text-only request returns `file_path: null`. An audio request returns an
-absolute temporary path on the server. This JSON response is for development;
-it does not yet send a TwiML or WhatsApp reply. Successful files remain available
-for the future AI extraction step, which must delete each file after consuming
-it. Failed and partial downloads are removed immediately.
+The webhook acknowledges signed messages with TwiML and handles voice notes in
+the background. Check application logs and the trader's reply to verify processing;
+HTTP 200 only confirms receipt. Temporary downloads are removed after processing.
 
 ## Checks and review
 
-Run `ruff check .` before opening a PR. GitHub Actions runs `lint` and `smoke`
-on every push and pull request. The smoke job imports infrastructure, starts the
-app, and checks `/health` without credentials or a database. Mypy and a full
-pytest suite are deliberately deferred for the build week.
+Run Ruff and the CI unittest modules before opening a PR. GitHub Actions runs
+lint and smoke checks on every push and pull request. The smoke job imports
+the app, runs offline tests, starts the server, and checks /health without
+credentials or a database. The PostgreSQL inventory integration test requires
+a separate TEST_DATABASE_URL.
 
 **Required main-branch policy:** every merge needs a PR, at least one human
 approval, and passing `lint` and `smoke` checks; direct pushes are prohibited.

@@ -12,10 +12,10 @@ from sqlalchemy.pool import StaticPool
 import httpx
 from sqlmodel import Session, SQLModel, create_engine, select
 
-from app.ai.generation import NameExtraction, NameStatus
-from app.ai.tts import register_media
-from app.ai.onboarding import (
-    _send_twilio_message,
+from app.providers.generation import NameExtraction, NameStatus
+from app.providers.tts import register_media
+from app.providers.twilio import _send_twilio_message
+from app.services.onboarding import (
     ensure_pending_trader,
     get_trader_by_phone,
     onboard_trader,
@@ -24,7 +24,7 @@ from app.ai.onboarding import (
     trader_exists,
 )
 from app.models.trader import Trader
-from app.routes.webhook import _process_incoming_message
+from app.api.webhook import _process_incoming_message
 from app.schemas.webhook import TwilioWebhookPayload
 from main import app
 
@@ -76,8 +76,8 @@ class TwilioDeliveryTestCase(unittest.TestCase):
         settings.twilio_whatsapp_number = "+14155238886"
         client = Mock()
         with (
-            patch("app.ai.onboarding.TwilioHttpClient"),
-            patch("app.ai.onboarding.Client", return_value=client),
+            patch("app.providers.twilio.TwilioHttpClient"),
+            patch("app.providers.twilio.Client", return_value=client),
         ):
             _send_twilio_message(settings, "+2348000000001", body="Abeg try again")
         kwargs = client.messages.create.call_args.kwargs
@@ -94,7 +94,7 @@ class OnboardingFlowTestCase(unittest.IsolatedAsyncioTestCase):
         )
         SQLModel.metadata.create_all(self.engine)
         self.engine_patch = patch(
-            "app.ai.onboarding.get_engine", return_value=self.engine
+            "app.services.onboarding.get_engine", return_value=self.engine
         )
         self.engine_patch.start()
         self.settings = object()
@@ -111,7 +111,7 @@ class OnboardingFlowTestCase(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "app.ai.onboarding.extract_stated_name",
+                "app.services.onboarding.extract_stated_name",
                 new=AsyncMock(
                     return_value=NameExtraction(
                         transcription="My name is Amina",
@@ -122,7 +122,7 @@ class OnboardingFlowTestCase(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch(
-                "app.ai.onboarding.send_onboarding_reply",
+                "app.services.onboarding.send_onboarding_reply",
                 new=AsyncMock(side_effect=assert_saved),
             ) as send,
         ):
@@ -145,8 +145,8 @@ class OnboardingFlowTestCase(unittest.IsolatedAsyncioTestCase):
             ]
         )
         with (
-            patch("app.ai.onboarding.extract_stated_name", new=extraction),
-            patch("app.ai.onboarding.send_onboarding_reply", new=AsyncMock()) as send,
+            patch("app.services.onboarding.extract_stated_name", new=extraction),
+            patch("app.services.onboarding.send_onboarding_reply", new=AsyncMock()) as send,
         ):
             first = await onboard_trader(
                 "+2348000000001", "/tmp/one.ogg", "audio/ogg", self.settings
@@ -172,7 +172,7 @@ class OnboardingFlowTestCase(unittest.IsolatedAsyncioTestCase):
                 )
             )
             session.commit()
-        with patch("app.ai.onboarding.send_onboarding_reply", new=AsyncMock()):
+        with patch("app.services.onboarding.send_onboarding_reply", new=AsyncMock()):
             result = await onboard_trader("+2348000000005", None, None, self.settings)
         self.assertEqual(result, "onboarding pending")
         with Session(self.engine) as session:
@@ -182,10 +182,10 @@ class OnboardingFlowTestCase(unittest.IsolatedAsyncioTestCase):
     async def test_extraction_failure_generates_retry(self) -> None:
         with (
             patch(
-                "app.ai.onboarding.extract_stated_name",
+                "app.services.onboarding.extract_stated_name",
                 new=AsyncMock(side_effect=RuntimeError("provider down")),
             ),
-            patch("app.ai.onboarding.send_onboarding_reply", new=AsyncMock()),
+            patch("app.services.onboarding.send_onboarding_reply", new=AsyncMock()),
         ):
             result = await onboard_trader(
                 "+2348000000002", "/tmp/input.ogg", "audio/ogg", self.settings
@@ -199,10 +199,10 @@ class OnboardingFlowTestCase(unittest.IsolatedAsyncioTestCase):
         send = unittest.mock.Mock()
         with (
             patch(
-                "app.ai.onboarding.synthesize_speech",
+                "app.services.onboarding.synthesize_speech",
                 new=AsyncMock(side_effect=RuntimeError("tts down")),
             ),
-            patch("app.ai.onboarding._send_twilio_message", new=send),
+            patch("app.services.onboarding._send_twilio_message", new=send),
         ):
             await send_onboarding_reply("+2348000000003", "Abeg try again", settings)
         self.assertEqual(send.call_args.kwargs["body"], "Abeg try again")
@@ -214,8 +214,8 @@ class OnboardingFlowTestCase(unittest.IsolatedAsyncioTestCase):
         synthesize = AsyncMock()
         send = unittest.mock.Mock(return_value="SM-text")
         with (
-            patch("app.ai.onboarding.synthesize_speech", new=synthesize),
-            patch("app.ai.onboarding._send_twilio_message", new=send),
+            patch("app.services.onboarding.synthesize_speech", new=synthesize),
+            patch("app.services.onboarding._send_twilio_message", new=send),
         ):
             await send_onboarding_reply("+2348000000003", "Abeg try again", settings)
 
@@ -239,17 +239,17 @@ class OnboardingFlowTestCase(unittest.IsolatedAsyncioTestCase):
         )
         settings = Mock()
         with (
-            patch("app.routes.webhook.get_engine", return_value=self.engine),
-            patch("app.routes.webhook.get_settings", return_value=settings),
+            patch("app.api.webhook.get_engine", return_value=self.engine),
+            patch("app.api.webhook.get_settings", return_value=settings),
             patch(
-                "app.routes.webhook._download_audio",
+                "app.api.webhook._download_audio",
                 new=AsyncMock(return_value="/tmp/completed-trader.ogg"),
             ) as download,
             patch(
-                "app.routes.webhook.process_trader_audio",
+                "app.api.webhook.process_trader_audio",
                 new=AsyncMock(return_value={"intent": "sale"}),
             ) as extract,
-            patch("app.routes.webhook._remove_file", new=AsyncMock()) as cleanup,
+            patch("app.api.webhook._remove_file", new=AsyncMock()) as cleanup,
             patch("builtins.print"),
         ):
             result = await _process_incoming_message(payload, object())
@@ -281,7 +281,7 @@ class TemporaryMediaTestCase(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(head_response.content, b"")
 
     async def test_expired_media_is_removed(self) -> None:
-        from app.ai import tts
+        from app.providers import tts
 
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "reply.mp3"

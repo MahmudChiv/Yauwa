@@ -3,20 +3,18 @@
 import asyncio
 import logging
 import time
-from urllib.parse import urlsplit
 
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
-from twilio.http.http_client import TwilioHttpClient
-from twilio.rest import Client
 
-from app.ai.generation import (
+from app.providers.generation import (
     NameStatus,
     looks_like_bot_name,
     extract_stated_name,
 )
-from app.ai.tts import register_media, synthesize_speech
-from app.config import Settings
+from app.providers.tts import register_media, synthesize_speech
+from app.providers.twilio import normalize_phone_number, _send_twilio_message, _validate_public_media_origin
+from app.core.config import Settings
 from app.db.session import get_engine
 from app.models.trader import Trader
 
@@ -29,11 +27,6 @@ FALLBACK_REPLIES = {
     "unrelated": "I dey here to help track your shop goods and sales. Abeg send clear voice note tell me your name.",
     "voice_required": "Abeg send your name as voice note make we fit start.",
 }
-
-
-def normalize_phone_number(phone_number: str) -> str:
-    """Normalize the Twilio WhatsApp sender into the stored E.164 value."""
-    return phone_number.strip().removeprefix("whatsapp:").strip()
 
 
 def trader_exists(session: Session, phone_number: str, name: str) -> bool:
@@ -113,50 +106,6 @@ def _save_name(phone_number: str, name: str) -> str:
         except Exception:
             session.rollback()
             raise
-
-
-def _twilio_address(phone_number: str) -> str:
-    phone = normalize_phone_number(phone_number)
-    return f"whatsapp:{phone}"
-
-
-def _send_twilio_message(
-    settings: Settings,
-    phone_number: str,
-    *,
-    body: str | None = None,
-    media_url: str | None = None,
-) -> str:
-    """Send one outbound WhatsApp message through Twilio and return its SID."""
-    client = Client(
-        settings.twilio_account_sid,
-        settings.twilio_auth_token.get_secret_value(),
-        http_client=TwilioHttpClient(timeout=15),
-    )
-    kwargs: dict[str, object] = {
-        "from_": _twilio_address(settings.twilio_whatsapp_number),
-        "to": _twilio_address(phone_number),
-    }
-    if body is not None:
-        kwargs["body"] = body
-    if media_url is not None:
-        kwargs["media_url"] = [media_url]
-    message = client.messages.create(**kwargs)
-    return str(message.sid)
-
-
-def _origin(url: object) -> tuple[str, str | None, int | None]:
-    parsed = urlsplit(str(url))
-    port = parsed.port or (443 if parsed.scheme == "https" else None)
-    return parsed.scheme, parsed.hostname, port
-
-
-def _validate_public_media_origin(settings: Settings) -> None:
-    """Require webhook and media URLs to resolve to the same running app."""
-    if _origin(settings.public_base_url) != _origin(settings.twilio_webhook_url):
-        raise ValueError(
-            "PUBLIC_BASE_URL must use the same origin as TWILIO_WEBHOOK_URL"
-        )
 
 
 async def send_onboarding_reply(

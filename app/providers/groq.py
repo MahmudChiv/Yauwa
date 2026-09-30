@@ -7,7 +7,7 @@ from typing import Any
 
 from groq import AsyncGroq, BadRequestError
 
-from app.config import Settings
+from app.core.config import Settings
 
 logger = logging.getLogger(__name__)
 JSON_SCHEMA_ATTEMPTS = 2

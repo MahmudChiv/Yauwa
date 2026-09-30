@@ -5,7 +5,8 @@ from decimal import Decimal
 
 from sqlmodel import Session, SQLModel, create_engine, select
 
-from app.ai.extraction import ExtractionResult, _validate_result
+from app.schemas.extraction import ExtractionResult
+from app.services.extraction import _validate_result
 from app.db.ledger import SaleWriteError, record_sales
 from app.db.money import money, sale_total
 from app.models.item import Item

@@ -22,7 +22,7 @@ parts of README.md still describe the original scaffold.
   explain the proposed change, why it is needed, and how existing data and
   callers are affected. Wait for the task owner's decision on anything outside
   the assigned scope. Never invent defaults for missing business data.
-- Follow existing patterns: use lazy `app.config.get_settings()`; use
+- Follow existing patterns: use lazy `app.core.config.get_settings()`; use
   `.get_secret_value()` only when passing a secret to a client; use SQLModel
   `Session` and `app.db.session.get_engine()` / `get_session()`. Feature code
   owns commits and rollbacks. Do not create tables at import or health startup.
@@ -55,7 +55,7 @@ parts of README.md still describe the original scaffold.
    ```sh
    python -m pip check
    ruff check .
-   python -m unittest app.ai.test_generation app.ai.test_onboarding app.ai.test_tts app.ai.test_extraction app.routes.test_webhook app.models.test_inventory_models
+   python -m unittest tests.providers.test_generation tests.services.test_onboarding tests.providers.test_tts tests.services.test_extraction tests.api.test_webhook tests.models.test_inventory_models
    ```
 
    Add your own test module to the command. Start `python -m uvicorn main:app
@@ -147,7 +147,7 @@ and deployment require separate owner review.
 ## Next task: saving stock items
 
 The next assigned task is to save extracted stock to `Item`, not to design
-restocking or sales persistence. Read `app/ai/extraction.py`,
+restocking or sales persistence. Read `app/services/extraction.py`,
 `app/models/item.py`, `app/models/trader.py`, and Alembic revisions first.
 The current extraction prints proposed rows with `item_name`,
 `unit_quantity`, `bulk_type`, `bulk_quantity`, `unit_price=None`, and

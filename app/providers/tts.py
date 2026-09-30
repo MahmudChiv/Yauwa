@@ -9,7 +9,7 @@ from pathlib import Path
 
 import httpx
 
-from app.config import Settings
+from app.core.config import Settings
 
 TTS_TIMEOUT_SECONDS = 30
 MAX_REPLY_AUDIO_BYTES = 8 * 1024 * 1024

@@ -11,8 +11,8 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.config import Settings
-from app.ai.groq_client import complete
+from app.core.config import Settings
+from app.providers.groq import complete
 
 logger = logging.getLogger(__name__)
 GEMINI_UPLOAD_TIMEOUT_SECONDS = 30

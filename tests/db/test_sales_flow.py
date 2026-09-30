@@ -11,11 +11,7 @@ from pydantic import ValidationError
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
-from app.ai.extraction import (
-    _pending_stock,
-    _save_extracted_sales,
-    process_trader_audio,
-)
+from app.services.message_processing import _pending_stock, _save_extracted_sales, process_trader_audio
 from app.db.ledger import SaleWriteError, record_sales
 from app.models.item import Item
 from app.models.sale import Sale
@@ -181,7 +177,7 @@ class SalesPersistenceTestCase(DatabaseFixture, unittest.TestCase):
         self.assertEqual(self.snapshot(), (10, []))
 
     def test_phone_lookup_normalizes_whatsapp_prefix(self):
-        with patch("app.ai.extraction.get_engine", return_value=self.engine):
+        with patch("app.services.message_processing.get_engine", return_value=self.engine):
             result = _save_extracted_sales("whatsapp:" + self.phone, [sale()])
         self.assertEqual(result["recorded_count"], 1)
         self.assertEqual(self.snapshot()[0], 7)
@@ -198,11 +194,11 @@ class SalesReplyTestCase(DatabaseFixture, unittest.IsolatedAsyncioTestCase):
         self.engine.dispose()
 
     async def run_message(self, payload, reply_mock):
-        with patch("app.ai.extraction.get_engine", return_value=self.engine), \
+        with patch("app.services.message_processing.get_engine", return_value=self.engine), \
              patch("app.services.market.get_engine", return_value=self.engine), \
-             patch("app.ai.extraction.extract_data_from_audio",
+             patch("app.services.message_processing.extract_data_from_audio",
                    new=AsyncMock(return_value=payload)), \
-             patch("app.ai.extraction.send_onboarding_reply", new=reply_mock):
+             patch("app.services.message_processing.send_onboarding_reply", new=reply_mock):
             return await process_trader_audio(self.phone, "unused.ogg", "audio/ogg",
                                               settings=self.settings)
 
@@ -220,7 +216,7 @@ class SalesReplyTestCase(DatabaseFixture, unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_write_sends_no_success_confirmation(self):
         reply = AsyncMock()
-        with self.assertLogs("app.ai.extraction", level="ERROR"):
+        with self.assertLogs("app.services.message_processing", level="ERROR"):
             await self.run_message(extracted(sales=[sale(quantity=11, total_price=1100)]), reply)
         self.assertEqual(self.snapshot(), (10, []))
         self.assertIn("no fit confirm", reply.await_args.args[1])
@@ -237,7 +233,7 @@ class SalesReplyTestCase(DatabaseFixture, unittest.IsolatedAsyncioTestCase):
         for status, intent in (("needs_clarification", "sale"), ("off_topic", "unknown")):
             with self.subTest(status=status):
                 reply = AsyncMock()
-                with patch("app.ai.extraction._save_extracted_sales") as save:
+                with patch("app.services.message_processing._save_extracted_sales") as save:
                     await self.run_message(extracted(status=status, intent=intent,
                                                      sales=[], reply_text="Abeg repeat am."), reply)
                 save.assert_not_called()
@@ -249,8 +245,8 @@ class SalesReplyTestCase(DatabaseFixture, unittest.IsolatedAsyncioTestCase):
         payload = extracted(intent="stock_intake", sales=[], stock_items=[dict(
             item_name="Eggs", unit_quantity=30, bulk_type=None, bulk_quantity=None)])
         with (
-            patch("app.ai.extraction._save_extracted_sales") as save,
-            patch("app.ai.extraction.save_stock_items", return_value=1) as save_stock,
+            patch("app.services.message_processing._save_extracted_sales") as save,
+            patch("app.services.message_processing.save_stock_items", return_value=1) as save_stock,
         ):
             await self.run_message(payload, reply)
         save.assert_not_called()
@@ -259,11 +255,11 @@ class SalesReplyTestCase(DatabaseFixture, unittest.IsolatedAsyncioTestCase):
 
     async def test_extraction_failure_sends_retry_without_database_write(self):
         reply = AsyncMock()
-        with patch("app.ai.extraction.extract_data_from_audio",
+        with patch("app.services.message_processing.extract_data_from_audio",
                    new=AsyncMock(side_effect=RuntimeError("provider down"))), \
-             patch("app.ai.extraction._save_extracted_sales") as save, \
-             patch("app.ai.extraction.send_onboarding_reply", new=reply), \
-             self.assertLogs("app.ai.extraction", level="ERROR"):
+             patch("app.services.message_processing._save_extracted_sales") as save, \
+             patch("app.services.message_processing.send_onboarding_reply", new=reply), \
+             self.assertLogs("app.services.message_processing", level="ERROR"):
             result = await process_trader_audio(self.phone, "unused.ogg", "audio/ogg",
                                                 settings=self.settings)
         self.assertIsNone(result)
@@ -278,10 +274,10 @@ class SalesReplyTestCase(DatabaseFixture, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(rows), 1)
 
     async def test_cancellation_before_write_propagates(self):
-        with patch("app.ai.extraction.extract_data_from_audio",
+        with patch("app.services.message_processing.extract_data_from_audio",
                    new=AsyncMock(side_effect=asyncio.CancelledError)), \
-             patch("app.ai.extraction._save_extracted_sales") as save, \
-             patch("app.ai.extraction.send_onboarding_reply", new=AsyncMock()):
+             patch("app.services.message_processing._save_extracted_sales") as save, \
+             patch("app.services.message_processing.send_onboarding_reply", new=AsyncMock()):
             with self.assertRaises(asyncio.CancelledError):
                 await process_trader_audio(self.phone, "unused.ogg", "audio/ogg",
                                            settings=self.settings)

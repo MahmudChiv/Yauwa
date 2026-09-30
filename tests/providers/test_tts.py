@@ -4,7 +4,7 @@ import unittest
 
 import httpx
 
-from app.ai.tts import ElevenLabsTTSException, _raise_for_tts_error
+from app.providers.tts import ElevenLabsTTSException, _raise_for_tts_error
 
 
 class ElevenLabsErrorTestCase(unittest.TestCase):

@@ -12,7 +12,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         # Resolve from this file so launching outside the repo still finds .env.
-        env_file=Path(__file__).resolve().parent.parent / ".env",
+        env_file=Path(__file__).resolve().parents[2] / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -45,7 +45,7 @@ class TwilioSettings(BaseSettings):
     """Configuration required only while handling Twilio webhooks."""
 
     model_config = SettingsConfigDict(
-        env_file=Path(__file__).resolve().parent.parent / ".env",
+        env_file=Path(__file__).resolve().parents[2] / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -79,7 +79,7 @@ class DatabaseSettings(BaseSettings):
     """Minimal config for database-only tooling (Alembic, migration scripts)."""
 
     model_config = SettingsConfigDict(
-        env_file=Path(__file__).resolve().parent.parent / ".env",
+        env_file=Path(__file__).resolve().parents[2] / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )

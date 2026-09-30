@@ -7,9 +7,10 @@ import logging
 from fastapi import FastAPI
 
 
-from app.ai.tts import cleanup_expired_media
-from app.routes.routes import router
-from app.routes.webhook import router as webhook_router
+from app.providers.tts import cleanup_expired_media
+from app.api.health import router as health_router
+from app.api.media import router as media_router
+from app.api.webhook import router as webhook_router
 
 logging.getLogger("app").setLevel(logging.INFO)
 
@@ -33,15 +34,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
-app.include_router(router)
+app.include_router(health_router)
+app.include_router(media_router)
 app.include_router(webhook_router)
-
-
-@app.get("/")
-def read_root():
-    return {"message": "Welcome to the API!"}
-
-
-@app.get("/health")
-def health_check():
-    return {"status": "healthy"}

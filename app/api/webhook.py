@@ -10,22 +10,20 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response, status
-from fastapi.responses import FileResponse
 from pydantic import ValidationError
 from starlette.datastructures import FormData
 from twilio.request_validator import (  # pyright: ignore[reportMissingImports]
     RequestValidator,
 )
 
-from app.ai.onboarding import (
+from app.services.onboarding import (
     onboarding_complete,
     onboard_trader,
-    normalize_phone_number,
     send_onboarding_reply,
 )
-from app.ai.extraction import process_trader_audio
-from app.ai.tts import get_media
-from app.config import Settings, TwilioSettings, get_settings, get_twilio_settings
+from app.services.message_processing import process_trader_audio
+from app.providers.twilio import normalize_phone_number
+from app.core.config import Settings, TwilioSettings, get_settings, get_twilio_settings
 from app.db.session import get_engine
 from app.schemas.webhook import TwilioWebhookPayload
 from sqlmodel import Session
@@ -383,15 +381,6 @@ async def _process_incoming_message(
         finally:
             if audio_path:
                 await _remove_file(Path(audio_path))
-
-
-@router.api_route("/media/{token}", methods=["GET", "HEAD"])
-async def serve_reply_audio(token: str) -> FileResponse:
-    """Serve an unexpired generated MP3 by opaque token."""
-    path = await get_media(token)
-    if path is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    return FileResponse(path, media_type="audio/mpeg", filename="reply.mp3")
 
 
 @router.post("/webhook", response_class=Response)

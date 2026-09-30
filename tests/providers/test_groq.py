@@ -8,10 +8,10 @@ from unittest.mock import AsyncMock, Mock, patch
 import httpx
 from groq import BadRequestError
 
-from app.ai.extraction import EXTRACTION_RESPONSE_SCHEMA, PACKAGE_SIZE_RESPONSE_SCHEMA
-from app.ai.generation import NameDecision
-from app.ai.groq_client import complete, strict_schema
-from app.config import Settings
+from app.services.extraction import EXTRACTION_RESPONSE_SCHEMA, PACKAGE_SIZE_RESPONSE_SCHEMA
+from app.providers.generation import NameDecision
+from app.providers.groq import complete, strict_schema
+from app.core.config import Settings
 
 
 class GroqContractTests(unittest.TestCase):
@@ -67,7 +67,7 @@ class GroqCompletionTests(unittest.IsolatedAsyncioTestCase):
         self.client.__aenter__ = AsyncMock(return_value=self.client)
         self.client.__aexit__ = AsyncMock(return_value=False)
         self.factory = self.enterContext(
-            patch("app.ai.groq_client.AsyncGroq", return_value=self.client)
+            patch("app.providers.groq.AsyncGroq", return_value=self.client)
         )
 
     @staticmethod

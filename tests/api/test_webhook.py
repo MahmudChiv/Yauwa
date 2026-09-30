@@ -13,8 +13,8 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 from twilio.request_validator import RequestValidator  # type: ignore[reportMissingImports]
 
-from app.config import TwilioSettings, get_twilio_settings
-from app.routes.webhook import (
+from app.core.config import TwilioSettings, get_twilio_settings
+from app.api.webhook import (
     MAX_AUDIO_BYTES,
     _download_audio,
     _process_incoming_message,
@@ -81,7 +81,7 @@ class WebhookTestCase(unittest.IsolatedAsyncioTestCase):
     async def test_acknowledges_and_dispatches_in_background(self) -> None:
         fields = {"From": "whatsapp:+2348012345678", "Body": "How far?"}
         with patch(
-            "app.routes.webhook._process_incoming_message",
+            "app.api.webhook._process_incoming_message",
             new=AsyncMock(return_value="onboarding pending"),
         ) as process:
             response = await self.post(fields)
@@ -93,7 +93,7 @@ class WebhookTestCase(unittest.IsolatedAsyncioTestCase):
     async def test_duplicate_message_sid_is_dispatched_once(self) -> None:
         fields = {"From": "whatsapp:+2348012345678"}
         with patch(
-            "app.routes.webhook._process_incoming_message",
+            "app.api.webhook._process_incoming_message",
             new=AsyncMock(return_value="onboarding pending"),
         ) as process:
             first = await self.post(fields)
@@ -127,7 +127,7 @@ class WebhookTestCase(unittest.IsolatedAsyncioTestCase):
             else:
                 self.fail("Empty Twilio settings unexpectedly validated")
 
-        with patch("app.routes.webhook.get_twilio_settings", side_effect=error):
+        with patch("app.api.webhook.get_twilio_settings", side_effect=error):
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://test"
             ) as client:
@@ -146,7 +146,7 @@ class WebhookTestCase(unittest.IsolatedAsyncioTestCase):
             "MediaContentType0": "image/jpeg",
         }
         with patch(
-            "app.routes.webhook._process_incoming_message",
+            "app.api.webhook._process_incoming_message",
             new=AsyncMock(return_value="onboarding pending"),
         ) as process:
             response = await self.post(fields)
@@ -173,24 +173,24 @@ class TraderRoutingTestCase(unittest.IsolatedAsyncioTestCase):
 
     async def test_onboarded_audio_reaches_extraction_and_is_cleaned(self) -> None:
         with (
-            patch("app.routes.webhook.Session"),
-            patch("app.routes.webhook.get_engine"),
-            patch("app.routes.webhook.onboarding_complete", return_value=True),
-            patch("app.routes.webhook.get_settings", return_value=self.settings),
+            patch("app.api.webhook.Session"),
+            patch("app.api.webhook.get_engine"),
+            patch("app.api.webhook.onboarding_complete", return_value=True),
+            patch("app.api.webhook.get_settings", return_value=self.settings),
             patch(
-                "app.routes.webhook._download_audio",
+                "app.api.webhook._download_audio",
                 new=AsyncMock(return_value="/tmp/routing-test.ogg"),
             ) as download,
             patch(
-                "app.routes.webhook.process_trader_audio",
+                "app.api.webhook.process_trader_audio",
                 new=AsyncMock(return_value={"intent": "stock_intake"}),
             ) as extract,
             patch(
-                "app.routes.webhook.onboard_trader",
+                "app.api.webhook.onboard_trader",
                 new=AsyncMock(),
             ) as onboard,
             patch(
-                "app.routes.webhook._remove_file",
+                "app.api.webhook._remove_file",
                 new=AsyncMock(),
             ) as cleanup,
             patch("builtins.print"),
@@ -212,23 +212,23 @@ class TraderRoutingTestCase(unittest.IsolatedAsyncioTestCase):
 
     async def test_incomplete_trader_still_uses_onboarding(self) -> None:
         with (
-            patch("app.routes.webhook.Session"),
-            patch("app.routes.webhook.get_engine"),
-            patch("app.routes.webhook.onboarding_complete", return_value=False),
-            patch("app.routes.webhook.get_settings", return_value=self.settings),
+            patch("app.api.webhook.Session"),
+            patch("app.api.webhook.get_engine"),
+            patch("app.api.webhook.onboarding_complete", return_value=False),
+            patch("app.api.webhook.get_settings", return_value=self.settings),
             patch(
-                "app.routes.webhook._download_audio",
+                "app.api.webhook._download_audio",
                 new=AsyncMock(return_value="/tmp/routing-test.ogg"),
             ),
             patch(
-                "app.routes.webhook.process_trader_audio",
+                "app.api.webhook.process_trader_audio",
                 new=AsyncMock(),
             ) as extract,
             patch(
-                "app.routes.webhook.onboard_trader",
+                "app.api.webhook.onboard_trader",
                 new=AsyncMock(return_value="onboarding pending"),
             ) as onboard,
-            patch("app.routes.webhook._remove_file", new=AsyncMock()),
+            patch("app.api.webhook._remove_file", new=AsyncMock()),
         ):
             result = await _process_incoming_message(
                 self.payload, self.twilio_settings
@@ -248,13 +248,13 @@ class TraderRoutingTestCase(unittest.IsolatedAsyncioTestCase):
             update={"media_url": None, "content_type": None}
         )
         with (
-            patch("app.routes.webhook.Session"),
-            patch("app.routes.webhook.get_engine"),
-            patch("app.routes.webhook.onboarding_complete", return_value=True),
-            patch("app.routes.webhook.get_settings", return_value=self.settings),
-            patch("app.routes.webhook.process_trader_audio", new=AsyncMock()) as extract,
+            patch("app.api.webhook.Session"),
+            patch("app.api.webhook.get_engine"),
+            patch("app.api.webhook.onboarding_complete", return_value=True),
+            patch("app.api.webhook.get_settings", return_value=self.settings),
+            patch("app.api.webhook.process_trader_audio", new=AsyncMock()) as extract,
             patch(
-                "app.routes.webhook.send_onboarding_reply",
+                "app.api.webhook.send_onboarding_reply",
                 new=AsyncMock(),
             ) as reply,
             patch("builtins.print"),
@@ -281,7 +281,7 @@ class AudioDownloadTestCase(unittest.IsolatedAsyncioTestCase):
             dir=self.temp_directory.name,
         )
         self.temp_patch = patch(
-            "app.routes.webhook.tempfile.NamedTemporaryFile",
+            "app.api.webhook.tempfile.NamedTemporaryFile",
             side_effect=factory,
         )
         self.temp_patch.start()
@@ -373,7 +373,7 @@ class AudioDownloadTestCase(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "app.routes.webhook.tempfile.NamedTemporaryFile",
+                "app.api.webhook.tempfile.NamedTemporaryFile",
                 side_effect=OSError("disk unavailable"),
             ),
             self.assertRaises(HTTPException) as caught,
