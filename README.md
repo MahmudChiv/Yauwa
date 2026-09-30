@@ -239,7 +239,3 @@ Railway's [native GitHub integration](https://Railway.com/docs/deploys) handles
 deployment after changes merge to `main` and checks pass. GitHub Actions is the
 merge gate, not the deployment runner. Railway setup is an administrator step
 and has not been activated by this scaffold.
-
-## Hackathon demo
-
-The optional prerecorded Musa walkthrough is documented in [demo/README.md](demo/README.md), with all 12 recording texts in [demo/SCRIPT.md](demo/SCRIPT.md). Enable it with `DEMO_MODE=true` and `DEMO_PHONE_NUMBER=+2348164247735`; all other numbers keep using the real pipeline. Disable it with `DEMO_MODE=false` and restart.
