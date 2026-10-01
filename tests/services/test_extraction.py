@@ -8,25 +8,18 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-from app.ai.groq_client import strict_schema
+from app.providers.groq import strict_schema
 from pydantic import ValidationError
 
-from app.ai.extraction import (
+from app.schemas.extraction import ExtractionResult, PackageSizeAnswer, StockItem
+from app.services.message_processing import EXTRACTION_RETRY_REPLY, PendingStock, PENDING_STOCK_TTL_SECONDS, _get_pending_stock, _pending_stock, process_trader_audio
+from app.services.extraction import (
     EXTRACTION_RESPONSE_SCHEMA,
-    EXTRACTION_RETRY_REPLY,
     PROMPT,
     AudioExtractionError,
-    ExtractionResult,
-    PendingStock,
-    PackageSizeAnswer,
-    StockItem,
-    PENDING_STOCK_TTL_SECONDS,
-    _get_pending_stock,
     _validate_result,
-    _pending_stock,
     extract_data_from_audio,
     extract_package_sizes_from_audio,
-    process_trader_audio,
 )
 
 
@@ -210,7 +203,7 @@ def _completion(text, finish_reason="stop", refusal=None):
 
 class GroqExtractionTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self.enterContext(patch("app.ai.extraction._resolve_trader_id", return_value=None))
+        self.enterContext(patch("app.services.message_processing._resolve_trader_id", return_value=None))
         _pending_stock.clear()
         self.settings = Mock()
         self.settings.gemini_api_key.get_secret_value.return_value = "secret"
@@ -230,7 +223,7 @@ class GroqExtractionTestCase(unittest.IsolatedAsyncioTestCase):
         self.groq.chat.completions.create = AsyncMock()
         self.groq.__aenter__ = AsyncMock(return_value=self.groq)
         self.groq.__aexit__ = AsyncMock(return_value=False)
-        self.enterContext(patch("app.ai.groq_client.AsyncGroq", return_value=self.groq))
+        self.enterContext(patch("app.providers.groq.AsyncGroq", return_value=self.groq))
         self.client.aio.aclose = AsyncMock()
 
     def tearDown(self) -> None:
@@ -246,7 +239,7 @@ class GroqExtractionTestCase(unittest.IsolatedAsyncioTestCase):
             path = Path(directory) / "voice.ogg"
             path.write_bytes(b"voice")
             with patch(
-                "app.ai.extraction._gemini_client",
+                "app.services.extraction._gemini_client",
                 return_value=self.client,
             ):
                 result = await extract_data_from_audio(
@@ -282,7 +275,7 @@ class GroqExtractionTestCase(unittest.IsolatedAsyncioTestCase):
             path = Path(directory) / "voice.ogg"
             path.write_bytes(b"voice")
             with patch(
-                "app.ai.extraction._gemini_client",
+                "app.services.extraction._gemini_client",
                 return_value=self.client,
             ):
                 with self.assertRaisesRegex(AudioExtractionError, "Could not process"):
@@ -299,11 +292,11 @@ class GroqExtractionTestCase(unittest.IsolatedAsyncioTestCase):
         result = _validate_result(_result(stock_items=[_stock_item()])).model_dump()
         with (
             patch(
-                "app.ai.extraction.extract_data_from_audio",
+                "app.services.message_processing.extract_data_from_audio",
                 new=AsyncMock(return_value=result),
             ),
             patch(
-                "app.ai.extraction.send_onboarding_reply",
+                "app.services.message_processing.send_onboarding_reply",
                 new=AsyncMock(),
             ) as send_reply,
             patch("builtins.print") as print_result,
@@ -326,11 +319,11 @@ class GroqExtractionTestCase(unittest.IsolatedAsyncioTestCase):
     async def test_processor_sends_retry_when_extraction_fails(self) -> None:
         with (
             patch(
-                "app.ai.extraction.extract_data_from_audio",
+                "app.services.message_processing.extract_data_from_audio",
                 new=AsyncMock(side_effect=AudioExtractionError("down")),
             ),
             patch(
-                "app.ai.extraction.send_onboarding_reply",
+                "app.services.message_processing.send_onboarding_reply",
                 new=AsyncMock(),
             ) as send_reply,
         ):
@@ -364,7 +357,7 @@ class GroqExtractionTestCase(unittest.IsolatedAsyncioTestCase):
             path = Path(directory) / "voice.ogg"
             path.write_bytes(b"voice")
             with patch(
-                "app.ai.extraction._gemini_client",
+                "app.services.extraction._gemini_client",
                 return_value=self.client,
             ):
                 answer = await extract_package_sizes_from_audio(
@@ -425,15 +418,15 @@ class GroqExtractionTestCase(unittest.IsolatedAsyncioTestCase):
         )
         with (
             patch(
-                "app.ai.extraction.extract_data_from_audio",
+                "app.services.message_processing.extract_data_from_audio",
                 new=AsyncMock(return_value=first_note),
             ) as extract,
             patch(
-                "app.ai.extraction.extract_package_sizes_from_audio",
+                "app.services.message_processing.extract_package_sizes_from_audio",
                 new=AsyncMock(return_value=answer),
             ) as extract_sizes,
             patch(
-                "app.ai.extraction.send_onboarding_reply",
+                "app.services.message_processing.send_onboarding_reply",
                 new=AsyncMock(),
             ) as send_reply,
             patch("builtins.print") as print_result,
@@ -482,15 +475,15 @@ class GroqExtractionTestCase(unittest.IsolatedAsyncioTestCase):
         )
         with (
             patch(
-                "app.ai.extraction.extract_data_from_audio",
+                "app.services.message_processing.extract_data_from_audio",
                 new=AsyncMock(return_value=first_note),
             ),
             patch(
-                "app.ai.extraction.extract_package_sizes_from_audio",
+                "app.services.message_processing.extract_package_sizes_from_audio",
                 new=AsyncMock(return_value=answer),
             ),
             patch(
-                "app.ai.extraction.send_onboarding_reply",
+                "app.services.message_processing.send_onboarding_reply",
                 new=AsyncMock(),
             ) as send_reply,
             patch("builtins.print"),
@@ -529,7 +522,7 @@ class GroqExtractionTestCase(unittest.IsolatedAsyncioTestCase):
             path = Path(directory) / "voice.ogg"
             path.write_bytes(b"voice")
             with patch(
-                "app.ai.extraction._gemini_client",
+                "app.services.extraction._gemini_client",
                 return_value=self.client,
             ):
                 with self.assertRaisesRegex(
@@ -563,7 +556,7 @@ class GroqExtractionTestCase(unittest.IsolatedAsyncioTestCase):
                     self.client.aio.files.delete.reset_mock()
                     self.client.aio.aclose.reset_mock()
                     self.groq.chat.completions.create.return_value = response
-                    with patch("app.ai.extraction._gemini_client", return_value=self.client):
+                    with patch("app.services.extraction._gemini_client", return_value=self.client):
                         with self.assertRaises(AudioExtractionError):
                             await extract_data_from_audio(path, "audio/ogg", settings=self.settings)
                     self.groq.chat.completions.create.assert_awaited_once()
@@ -583,8 +576,8 @@ class GroqExtractionTestCase(unittest.IsolatedAsyncioTestCase):
             path = Path(directory) / "voice.ogg"
             path.write_bytes(b"voice")
             with (
-                patch("app.ai.extraction._gemini_client", return_value=self.client),
-                patch("app.ai.extraction.EXTRACTION_TIMEOUT_SECONDS", 0.01),
+                patch("app.services.extraction._gemini_client", return_value=self.client),
+                patch("app.services.extraction.EXTRACTION_TIMEOUT_SECONDS", 0.01),
             ):
                 with self.assertRaises(AudioExtractionError):
                     await extract_data_from_audio(path, "audio/ogg", settings=self.settings)
@@ -598,7 +591,7 @@ class GroqExtractionTestCase(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "voice.ogg"
             path.write_bytes(b"voice")
-            with patch("app.ai.extraction._gemini_client", return_value=self.client):
+            with patch("app.services.extraction._gemini_client", return_value=self.client):
                 with self.assertRaises(AudioExtractionError):
                     await extract_data_from_audio(path, "audio/ogg", settings=self.settings)
         self.groq.chat.completions.create.assert_not_awaited()
@@ -612,7 +605,7 @@ class GroqExtractionTestCase(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "voice.ogg"
             path.write_bytes(b"voice")
-            with patch("app.ai.extraction._gemini_client", return_value=self.client):
+            with patch("app.services.extraction._gemini_client", return_value=self.client):
                 result = await extract_data_from_audio(
                     path, "audio/ogg", settings=self.settings,
                     model="override-test", known_items=["Cabin biscuit"],
@@ -630,7 +623,7 @@ class GroqExtractionTestCase(unittest.IsolatedAsyncioTestCase):
             created_at=0,
         )
         with patch(
-            "app.ai.extraction.time.monotonic",
+            "app.services.message_processing.time.monotonic",
             return_value=PENDING_STOCK_TTL_SECONDS + 1,
         ):
             self.assertIsNone(_get_pending_stock(phone))

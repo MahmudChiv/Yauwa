@@ -36,21 +36,22 @@ jobs:
       - name: Run application and sales regression tests
         run: >-
           python -m unittest
-          app.routes.test_webhook
-          app.ai.test_extraction
-          app.ai.test_market
-          app.ai.test_generation
-          app.ai.test_groq_client
-          app.ai.test_onboarding
-          app.ai.test_tts
-          app.models.test_inventory_models
-          app.db.test_ledger
-          app.db.test_sales_flow
+          tests.api.test_webhook
+          tests.services.test_extraction
+          tests.services.test_market_delivery
+          tests.services.test_market_restock
+          tests.providers.test_generation
+          tests.providers.test_groq
+          tests.services.test_onboarding
+          tests.providers.test_tts
+          tests.models.test_inventory_models
+          tests.db.test_ledger
+          tests.db.test_sales_flow
       - name: Import infrastructure and check app startup
         shell: bash
         run: |
           set -euo pipefail
-          python -c "import app.config; import app.db.session; from main import app"
+          python -c "import app.core.config; import app.db.session; from main import app"
           python -m uvicorn main:app --host 127.0.0.1 --port 8000 > /tmp/yauwa-smoke.log 2>&1 &
           server_pid=$!
           cleanup() {

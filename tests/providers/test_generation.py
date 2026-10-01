@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-from app.ai.generation import (
+from app.providers.generation import (
     NameStatus,
     extract_stated_name,
     generate_onboarding_reply,
@@ -47,7 +47,7 @@ class GroqGenerationTestCase(unittest.IsolatedAsyncioTestCase):
         self.groq.chat.completions.create = AsyncMock()
         self.groq.__aenter__ = AsyncMock(return_value=self.groq)
         self.groq.__aexit__ = AsyncMock(return_value=False)
-        self.factory = self.enterContext(patch("app.ai.groq_client.AsyncGroq", return_value=self.groq))
+        self.factory = self.enterContext(patch("app.providers.groq.AsyncGroq", return_value=self.groq))
 
     async def test_name_extraction_preserves_transcription_and_uses_groq_schema(self) -> None:
         self.groq.chat.completions.create.return_value = _completion(json.dumps({
@@ -56,7 +56,7 @@ class GroqGenerationTestCase(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "voice.ogg"
             path.write_bytes(b"voice")
-            with patch("app.ai.generation._gemini_client", return_value=self.client):
+            with patch("app.providers.generation._gemini_client", return_value=self.client):
                 result = await extract_stated_name(
                     str(path), "audio/ogg", self.settings
                 )
@@ -101,7 +101,7 @@ class GroqGenerationTestCase(unittest.IsolatedAsyncioTestCase):
         self.groq.chat.completions.create.return_value = _completion(
             text="  Welcome!  Wetin be your name?  "
         )
-        with patch("app.ai.generation._gemini_client", return_value=self.client):
+        with patch("app.providers.generation._gemini_client", return_value=self.client):
             result = await generate_onboarding_reply("ask_name", self.settings)
 
         self.assertEqual(result, "Welcome! Wetin be your name?")
@@ -126,7 +126,7 @@ class GroqGenerationTestCase(unittest.IsolatedAsyncioTestCase):
                 self.client.aio.files.delete.reset_mock()
                 self.client.aio.aclose.reset_mock()
                 self.groq.chat.completions.create.return_value = response
-                with patch("app.ai.generation._gemini_client", return_value=self.client):
+                with patch("app.providers.generation._gemini_client", return_value=self.client):
                     with self.assertRaises(ValueError):
                         await extract_stated_name("voice.ogg", "audio/ogg", self.settings)
                 self.groq.chat.completions.create.assert_awaited_once()
@@ -151,7 +151,7 @@ class GroqGenerationTestCase(unittest.IsolatedAsyncioTestCase):
         self.groq.chat.completions.create.return_value = _completion(
             '{"status":"missing","name":null,"name_evidence":null}'
         )
-        with patch("app.ai.generation._gemini_client", return_value=self.client):
+        with patch("app.providers.generation._gemini_client", return_value=self.client):
             result = await extract_stated_name("voice.ogg", "audio/ogg", self.settings)
         self.assertEqual(result.status, NameStatus.MISSING)
         self.assertIsNone(result.name)
@@ -164,7 +164,7 @@ if __name__ == "__main__":
 
 class NameValidationTestCase(unittest.TestCase):
     def test_bot_name_variant_is_not_accepted_as_trader_name(self) -> None:
-        from app.ai.generation import NameExtraction, _clean_name
+        from app.providers.generation import NameExtraction, _clean_name
 
         result = _clean_name(
             NameExtraction(

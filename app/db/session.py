@@ -6,7 +6,7 @@ from functools import lru_cache
 from sqlalchemy import Engine
 from sqlmodel import Session, create_engine
 
-from app.config import get_database_settings
+from app.core.config import get_database_settings
 
 
 @lru_cache(maxsize=1)

@@ -7,9 +7,9 @@ from pathlib import Path
 
 from mutagen.mp3 import MP3
 
-from app.ai.onboarding import _send_twilio_message, _validate_public_media_origin
-from app.ai.tts import register_media, synthesize_speech
-from app.config import Settings
+from app.providers.twilio import _send_twilio_message, _validate_public_media_origin
+from app.providers.tts import register_media, synthesize_speech
+from app.core.config import Settings
 from app.services.market import MarketItem, get_market_items, save_sent_market_list
 
 logger = logging.getLogger(__name__)
