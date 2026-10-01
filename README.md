@@ -1,235 +1,199 @@
 # Yauwa
 
-Yauwa is a voice-first WhatsApp bookkeeping bot for Nigerian informal traders
-who cannot read or write, or have limited literacy. Traders will log sales,
-track stock, and manage restocking by speaking. Replies must be in Nigerian
-Pidgin and delivered as audio: literacy is the core constraint.
+Yauwa is a WhatsApp bookkeeping assistant for unlettered Nigerian traders. A trader can send a voice note about stock or sales and receive a spoken reply in Nigerian Pidgin. The application also helps track low stock, prepare a market list, and record restocking.
 
-**Current status:** the signed Twilio webhook accepts voice notes, routes new
-traders through onboarding, and processes stock, sales, market lists, and
-restock confirmations. Gemini handles transcription, Groq extracts structured
-data and generates replies, ElevenLabs produces audio, and PostgreSQL stores
-ledger data.
+## Judge walkthrough on WhatsApp
 
-Voice note → Twilio webhook → Gemini transcription → Groq extraction →
-PostgreSQL ledger update → Pidgin reply → ElevenLabs audio → Twilio delivery
+Use the WhatsApp number supplied with the submission. Use a
+fresh WhatsApp number for the first run because Yauwa remembers onboarded traders.
 
-## Tech stack and layout
+1. Send a **voice note** saying your name, for example, “My name is Amina.”
+   Expect a spoken welcome and a prompt to describe shop stock.
+2. Send a voice note such as “I have 30 biscuits in my shop.” Expect Yauwa to
+   acknowledge and save the stock.
+3. Send “I sold 3 biscuits for 100 naira each.” Expect a sales confirmation; the
+   recorded biscuit quantity should decrease from 30 to 27.
+4. Ask for a market list or report a restock to try those flows. If you describe
+   bulk stock without saying how many pieces are in each pack, Yauwa asks for
+   that detail in a follow-up voice note.
 
-- Python 3.12 and FastAPI: HTTP application.
-- PostgreSQL, SQLModel, and psycopg2-binary: synchronous database access.
-- pydantic-settings: centralized environment configuration.
-- Gemini (`google-genai`): transcription.
-- Groq (`groq`): structured extraction and reply generation.
-- ElevenLabs: TTS only; Twilio: WhatsApp transport. HTTPX is available for HTTP calls.
-- Ruff and GitHub Actions: lint and startup checks; Railway: deployment.
+Replies arrive after background processing, so allow time for the audio message.
+Use test-only details. Text messages can reach the bot, but the bookkeeping flow
+is designed for voice notes.
+
+## What works
+
+- Voice onboarding records a trader's name before bookkeeping starts.
+- Voice notes can add stock, record one or more sales, request a market list, and confirm restocking.
+- Bulk stock without a stated pack size prompts a follow-up voice note.
+- Recorded sales update matching inventory and can trigger low-stock alerts.
+- Replies use ElevenLabs audio when available, with a text fallback if audio delivery fails.
+
+Twilio sends WhatsApp webhooks to FastAPI. Gemini transcribes voice notes; Groq extracts structured bookkeeping details. Services validate and save the result through SQLModel and PostgreSQL. ElevenLabs produces reply audio, which Twilio retrieves from a temporary media endpoint.
 
 ```text
-main.py                     FastAPI app assembly and media cleanup lifespan
-app/
-  api/                      Webhook, media, and health HTTP routes
-  core/config.py            Validated settings loaded only when needed
-  schemas/                  Incoming webhook and extraction data contracts
-  services/                 Onboarding, message flow, inventory, sales, market
-  providers/                Gemini/Groq, ElevenLabs, and reply integrations
-  db/                       Session setup and ledger persistence
-  models/                   SQLModel entities
-tests/
-  api/  services/  providers/  db/  models/  integration/
-migrations/                 Alembic revisions
+WhatsApp → Twilio webhook → Gemini transcription → Groq extraction
+         → stock/sales services → PostgreSQL
+         → Pidgin reply → ElevenLabs audio → Twilio → trader
 ```
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before your first branch and ask your
-coding agent to read [GUIDE.md](GUIDE.md) before every task.
+The webhook validates Twilio's signature and acknowledges accepted messages before processing them in the background. HTTP 200 confirms receipt, not completion of the ledger write or reply.
 
-## Local setup
+## Repository layout
 
-1. Install Git and Python **3.12**. Get the team's repository URL, then replace
-   `REPOSITORY_URL` below with that URL:
+```text
+main.py                  FastAPI app
+app/
+  api/                   Health, webhook, and temporary media routes
+  core/config.py         Lazy environment settings
+  schemas/               Webhook and extraction data contracts
+  services/              Onboarding, message processing, stock, sales, market
+  providers/             Gemini/Groq, ElevenLabs, and Twilio integrations
+  db/                    Database sessions and ledger writes
+  models/                SQLModel entities
+migrations/              Alembic database revisions
+tests/                   API, service, provider, model, DB, and integration tests
+```
 
-   ```sh
-   git clone REPOSITORY_URL yauwa
-   cd yauwa
-   ```
+The public routes are `/health`, `/api/v1/webhook`, and `/api/v1/media/{token}`. Interactive API documentation is available at `/docs`.
 
-2. Create a virtual environment. It keeps this project's packages separate from
-   other Python projects. On Linux/macOS:
+## Run locally
 
-   ```sh
-   python3.12 -m venv .venv
-   source .venv/bin/activate
-   ```
+You need Python 3.12, PostgreSQL, and development credentials for Twilio, Gemini, Groq, and ElevenLabs to exercise the complete voice flow. The health route and offline tests do not need provider credentials or a running database.
 
-   On Windows PowerShell:
-
-   ```powershell
-   py -3.12 -m venv .venv
-   .\.venv\Scripts\Activate.ps1
-   ```
-
-   Activate it again in each new terminal. If you already use `fastapi-env`,
-   activate that environment instead; you do not need to recreate it.
-
-3. Install the shared dependencies from the repository root:
-
-   ```sh
-   python -m pip install -r requirements.txt
-   python -m pip check
-   ```
-
-   Direct dependency versions are pinned to keep teammates aligned. This is not
-   a full transitive lockfile. Ruff is included so local and CI lint use the same version.
-
-4. Copy the environment template. On Linux/macOS:
-
-   ```sh
-   cp .env.example .env
-   ```
-
-   On Windows PowerShell:
-
-   ```powershell
-   Copy-Item .env.example .env
-   ```
-
-   Edit `.env` locally. All `XXXXXX` entries are placeholders, not credentials.
-   Use your own development accounts and free-tier/trial access where available;
-   check each provider's current limits and eligibility. Never commit `.env`.
-
-   | Variable | What to supply |
-   | --- | --- |
-   | `DATABASE_URL` | A PostgreSQL connection URL for your own development database |
-   | `TWILIO_ACCOUNT_SID` | Your Twilio account SID |
-   | `TWILIO_AUTH_TOKEN` | Your Twilio auth token |
-   | `TWILIO_WHATSAPP_NUMBER` | Your Twilio sender, with `whatsapp:` prefix and international number |
-   | `TWILIO_WEBHOOK_URL` | Exact public HTTPS URL Twilio calls, ending in `/api/v1/webhook` |
-   | `PUBLIC_BASE_URL` | Public HTTPS origin where Twilio can fetch generated reply audio |
-   | `GEMINI_API_KEY` | Your Google AI Studio API key |
-   | `GROQ_API_KEY` | Your Groq API key |
-   | `GROQ_MODEL` | Pidgin replies; defaults to `openai/gpt-oss-120b` |
-   | `GEMINI_TRANSCRIPTION_MODEL` | Dedicated audio transcription model; defaults to `gemini-3.5-transcribe` |
-   | `GROQ_EXTRACTION_MODEL` | Native JSON Schema extraction; defaults to `openai/gpt-oss-20b` |
-   | `ELEVENLABS_API_KEY` | Your ElevenLabs API key |
-   | `ELEVENLABS_VOICE_ID` | The voice ID selected for your development account |
-   | `ELEVENLABS_MODEL_ID` | Optional TTS model override; defaults to `eleven_v3` |
-
-   Provider setup: [Gemini](https://ai.google.dev/gemini-api/docs/get-started),
-   [Groq](https://console.groq.com/docs/quickstart),
-   [Twilio WhatsApp Sandbox](https://www.twilio.com/docs/whatsapp/sandbox),
-   [ElevenLabs](https://elevenlabs.io/docs/overview/quickstart).
-
-   Groq extraction uses strict native JSON Schema output. Existing fixed reply
-   templates remain unchanged; the onboarding reply generator uses Groq when called.
-   No extraction or reply request falls back to Gemini.
-
-   For database tasks, install PostgreSQL locally or provision a development
-   PostgreSQL database and create a database/user. A local URL has this shape:
-   `postgresql+psycopg2://USER:PASSWORD@localhost:5432/yauwa`.
-   Replace the sample values, URL-encode special characters in credentials, and
-   retain any SSL parameters supplied by a hosted provider. Use the synchronous
-   `postgresql://` or `postgresql+psycopg2://` URL format, not an async driver URL.
-   No tables or migrations are created by this scaffold.
-
-5. Start the app from the repository root:
-
-   ```sh
-   fastapi dev main.py
-   ```
-
-   Alternatively:
-
-   ```sh
-   uvicorn main:app --reload
-   ```
-
-   Visit <http://127.0.0.1:8000/health>; expect `{"status":"healthy"}`.
-   API documentation is at <http://127.0.0.1:8000/docs>.
-   Stop the server with Ctrl+C.
-
-The health endpoint needs no credentials or running database. Settings validate
-only when `get_settings()` is called; at that point required values are validated,
-and `XXXXXX` is not a valid database URL. Placeholder provider keys cannot make
-real API calls. Settings read the repository-root `.env`; process environment
-variables take precedence. Restart after changing configuration because settings
-and the engine are cached.
-
-Future code must use `get_settings()` instead of reading the environment
-directly. Secret fields expose their value with `.get_secret_value()` only when
-passing it to a provider client; do not log settings or database URLs.
-Database routes can use `Depends(get_session)`. Sessions close automatically;
-feature code owns commits. Engine construction does not connect or create tables.
-
-The webhook uses the focused `get_twilio_settings()` accessor, so it requires
-only `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_WEBHOOK_URL`.
-
-## Twilio webhook setup and local test
-
-Expose the local server through an HTTPS tunnel, then set `TWILIO_WEBHOOK_URL`
-to the exact public URL, such as
-`https://your-tunnel.example/api/v1/webhook`. In the
-Twilio WhatsApp Sandbox or sender settings, configure **When a message comes in**
-to use the same URL with HTTP POST. Twilio signs the URL, so changes to its
-scheme, hostname, path, query string, or trailing slash will invalidate requests.
-
-For a signed local text-message test, keep the app running and use another
-terminal. The example signs every field that it sends:
+From the repository root:
 
 ```sh
-export TWILIO_WEBHOOK_URL='https://your-tunnel.example/api/v1/webhook'
-export TEST_SENDER='whatsapp:+2348012345678'
-export TWILIO_SIGNATURE=$(python - <<'PY'
-from app.core.config import get_twilio_settings
-from twilio.request_validator import RequestValidator
-
-settings = get_twilio_settings()
-fields = {"From": "whatsapp:+2348012345678"}
-validator = RequestValidator(settings.twilio_auth_token.get_secret_value())
-print(validator.compute_signature(str(settings.twilio_webhook_url), fields))
-PY
-)
-curl -X POST "${TWILIO_WEBHOOK_URL}" \
-  -H "X-Twilio-Signature: ${TWILIO_SIGNATURE}" \
-  --data-urlencode "From=${TEST_SENDER}"
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+cp .env.example .env
 ```
 
-The webhook acknowledges signed messages with TwiML and handles voice notes in
-the background. Check application logs and the trader's reply to verify processing;
-HTTP 200 only confirms receipt. Temporary downloads are removed after processing.
+On Windows PowerShell, activate with `.venv\Scripts\Activate.ps1` and copy the template with `Copy-Item .env.example .env`.
 
-## Checks and review
+Replace the placeholders in `.env` with development values. Keep that file private. These settings are required for the full application flow:
 
-Run Ruff and the CI unittest modules before opening a PR. GitHub Actions runs
-lint and smoke checks on every push and pull request. The smoke job imports
-the app, runs offline tests, starts the server, and checks /health without
-credentials or a database. The PostgreSQL inventory integration test requires
-a separate TEST_DATABASE_URL.
+| Setting | Purpose |
+| --- | --- |
+| `DATABASE_URL` | PostgreSQL URL, such as `postgresql+psycopg2://USER:PASSWORD@localhost:5432/yauwa` |
+| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` | Twilio account credentials |
+| `TWILIO_WHATSAPP_NUMBER` | Authorized WhatsApp sender, including the `whatsapp:` prefix |
+| `TWILIO_WEBHOOK_URL` | Exact public HTTPS webhook URL ending in `/api/v1/webhook` |
+| `PUBLIC_BASE_URL` | Public HTTPS origin for reply audio; must match the webhook's origin |
+| `GEMINI_API_KEY`, `GEMINI_TRANSCRIPTION_MODEL` | Gemini credentials and a configured transcription model |
+| `GROQ_API_KEY` | Groq credential for structured extraction and generated replies |
+| `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID` | ElevenLabs credentials for spoken replies |
 
-**Required main-branch policy:** every merge needs a PR, at least one human
-approval, and passing `lint` and `smoke` checks; direct pushes are prohibited.
-GitHub must enforce this through branch protection, including administrators.
-Files in this repository cannot activate those settings. Activation has not been
-verified here; follow the administrator checklist in [CONTRIBUTING.md](CONTRIBUTING.md).
+`GROQ_MODEL`, `GROQ_EXTRACTION_MODEL`, and `ELEVENLABS_MODEL_ID` have defaults in `app/core/config.py`. `GEMINI_TRANSCRIPTION_MODEL` does **not** have a default. Set `TEST_DATABASE_URL` only when running the PostgreSQL integration test.
 
-For automated first-pass review, an administrator should
-[install CodeRabbit](https://docs.coderabbit.ai/getting-started/quickstart) for
-this GitHub repository and enable automatic reviews of PRs targeting `main` in
-its repository settings. Verify it reviews a test PR. This external setup is not
-performed by these files. CodeRabbit supplements, and never replaces, the
-required human approval.
+Create the development database, then apply the checked-in Alembic migrations:
 
-## Deployment setup for the repository owner
+```sh
+python -m alembic upgrade head
+python -m uvicorn main:app --reload
+```
 
-Connect a Railway web service to this GitHub repository and select branch `main`:
+Open <http://127.0.0.1:8000/health>. It should return `{"status":"healthy"}`. App startup and the health route do not connect to PostgreSQL; bookkeeping does.
 
-- Runtime: Python 3.12 (set Railway's `PYTHON_VERSION` to a supported 3.12 patch).
-- Build command: `pip install -r requirements.txt`.
-- Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`.
-- Health check path: `/health`.
-- Auto-deploy: **After CI Checks Pass**.
-- Set the application variables in Railway's environment settings using
-  deployment credentials and the deployment PostgreSQL URL; do not upload `.env`.
+## Connect WhatsApp to the local app
 
-Railway's [native GitHub integration](https://Railway.com/docs/deploys) handles
-deployment after changes merge to `main` and checks pass. GitHub Actions is the
-merge gate, not the deployment runner. Railway setup is an administrator step
-and has not been activated by this scaffold.
+These steps use [ngrok](https://ngrok.com/download) to give Twilio a public HTTPS
+address for the app running on your computer. Keep PostgreSQL running and apply
+the migrations in the setup section first.
+
+1. Start Yauwa in one terminal:
+
+   ```sh
+   python -m uvicorn main:app --reload --port 8000
+   ```
+
+2. [Install ngrok](https://ngrok.com/download). Once, replace the placeholder
+   with your own ngrok authtoken and run:
+
+   ```sh
+   ngrok config add-authtoken YOUR_NGROK_AUTHTOKEN
+   ```
+
+   Keep the authtoken out of this repository's `.env`. In a second terminal,
+   start a tunnel to the app's port:
+
+   ```sh
+   ngrok http 8000
+   ```
+
+   Copy the HTTPS forwarding URL that ngrok displays. For example, if it shows
+   `https://abc123.ngrok-free.app`, check that
+   `https://abc123.ngrok-free.app/health` returns `{"status":"healthy"}`.
+
+3. Set these values in the repository-root `.env` using **your** forwarding URL:
+
+   ```dotenv
+   PUBLIC_BASE_URL=https://abc123.ngrok-free.app
+   TWILIO_WEBHOOK_URL=https://abc123.ngrok-free.app/api/v1/webhook
+   ```
+
+   Set `TWILIO_WHATSAPP_NUMBER` to the WhatsApp sender shown in your Twilio
+   account, with the `whatsapp:` prefix. Restart Uvicorn after changing `.env`;
+   settings are cached. Keep both the app and ngrok running.
+
+4. In Twilio, configure incoming WhatsApp messages to send an **HTTP POST** to
+   the exact `TWILIO_WEBHOOK_URL` above, then save:
+
+   - For the [Twilio Sandbox](https://www.twilio.com/docs/whatsapp/sandbox),
+     open its legacy Console **Sandbox settings** and set
+     **When a Message Comes in**.
+   - For a trial account using
+     [Try out WhatsApp](https://help.twilio.com/articles/55716571409819-How-do-I-receive-WhatsApp-messages-while-testing),
+     open **Receive a message**, choose **Custom**, and set its **Webhook URL**.
+     For an approved WhatsApp sender, set its inbound webhook in that sender's
+     configuration.
+
+5. If using a Sandbox or trial testing environment, connect the tester's
+   WhatsApp account first: scan Twilio's QR code or send its displayed
+   `join <sandbox code>` message to the displayed number. Wait for Twilio's
+   confirmation, then send a **voice note** from that same phone and follow
+   the judge walkthrough above.
+
+You should see a POST to `/api/v1/webhook` in the ngrok request log, followed by
+a WhatsApp reply after background processing. Check application logs and the
+development database when verifying a saved sale or stock item. The HTTP 200
+webhook response only confirms receipt. If ngrok gives you a new URL, update
+both `.env` values and Twilio's webhook URL, then restart the app. The URLs
+must match exactly for Twilio signature validation; keep ngrok running until
+Twilio has fetched the reply audio.
+
+## Checks
+
+Run the checks used by GitHub Actions before opening a pull request:
+
+```sh
+python -m pip check
+ruff check .
+python -m unittest \
+  tests.api.test_webhook \
+  tests.services.test_extraction \
+  tests.services.test_market_delivery \
+  tests.services.test_market_restock \
+  tests.providers.test_generation \
+  tests.providers.test_groq \
+  tests.services.test_onboarding \
+  tests.providers.test_tts \
+  tests.models.test_inventory_models \
+  tests.db.test_ledger \
+  tests.db.test_sales_flow
+```
+
+CI also starts Uvicorn and checks `/health`. The tests above mock external providers and need no live credentials. To run the separate PostgreSQL inventory integration test, set `TEST_DATABASE_URL` to a disposable migrated database and run:
+
+```sh
+python -m unittest tests.integration.test_save_stock_items
+```
+
+Some tests deliberately log simulated provider failures while checking fallback behavior; the test command's final `OK` or `FAILED` line determines its result.
+
+## Deployment and current limits
+
+The app can run with `uvicorn main:app --host 0.0.0.0 --port $PORT`. Apply Alembic migrations to the deployment database before handling trader messages, configure the same environment variables as above, and set `/health` as the health-check path. CI checks code and startup; it does not deploy or migrate a database.
+
+Duplicate webhook tracking and pending bulk-stock follow-ups live in process memory. They can be lost on restart and are not shared across workers. Background processing also means webhook acknowledgement is not a delivery guarantee. The offline suite covers application behavior with mocked providers; a live WhatsApp and PostgreSQL run is a separate verification step. Some current debug prints include extracted test content, so use test-only data for local trials.
